@@ -1,0 +1,68 @@
+name: CI
+
+# PR / main 的基础校验。此前仓库没有任何 CI，前端能不能构建、引擎 e2e 过不过
+# 只有在本机手动跑才知道，main 可以长期是红的。tag 打包见 release.yml。
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: 前端构建 / 引擎 e2e
+    # macOS runner：这个项目的目标平台是桌面（Electron + 本机 Express），
+    # 引擎里到处是 darwin 分支（~/KylinWork、PlistBuddy 改名、osascript 通知、
+    # screenshot 的 swift 小工具），e2e 套件也是按 macOS 假设写的。
+    # Linux/Windows 的构建由 release.yml 的对应作业覆盖。
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            ui/package-lock.json
+
+      - name: 安装依赖（引擎 + 桌面壳）
+        run: npm ci
+
+      - name: 安装依赖（前端）
+        run: npm ci
+        working-directory: ui
+
+      - name: 前端类型检查
+        run: npm run typecheck
+        working-directory: ui
+
+      # 产物进 public/dist，被 electron-builder 的白名单收进安装包。
+      # 这一步同时是"前端能不能真的发出去"的验证——只有类型检查过不了构建这道坎。
+      - name: 前端构建
+        run: npm run build
+        working-directory: ui
+
+      # 打包配置是 PR 里最容易改坏、又最难发现的地方：写错个字段名要等到发 tag
+      # 打不出包才知道。这里只把配置 require 一遍（不真打包，几秒钟），
+      # 顺带验证 skillPatterns() 问 git 要技能清单那条路是通的。
+      - name: 打包配置能加载
+        run: |
+          node -e "const c=require('./electron-builder.config.js'); console.log('mac:', c.mac.target, 'win:', c.win.target, 'linux:', c.linux.target)"
+
+      # e2e 会往工作目录写成果文件（e2e-*.xlsx / *.md）。全新 clone 里 workspace/
+      # 不存在（.gitignore 里），不建的话测试会在第一步就 ENOENT 挂掉。
+      # ⚠️ 不要设 KYLINWORK_HOME：engine/skills.js 只读数据目录下的 skills/，
+      # 换到别处会一个技能都找不到，Agent 管线用例随即失败（本地"隔离测试"踩过）。
+      - name: 准备测试用工作目录
+        run: mkdir -p workspace
+
+      - name: 引擎 e2e 测试
+        run: npm test

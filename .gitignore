@@ -1,0 +1,38 @@
+# ===== 依赖 =====
+node_modules/
+
+# ===== 构建产物 =====
+dist/
+dist-*/
+dist-release/
+public/dist/
+*.tsbuildinfo
+
+# 定时任务、运行期状态（每台机器一份）
+/schedules.json
+/schedules.json.bak
+
+# ===== 本机运行数据（不进仓库：每台机器独立，且含密钥与用户数据）=====
+# 配置里可能有模型 api_key / 平台 token
+/config.json
+# 带时间戳的备份（config.json.bak-20260920-184444）含的密钥和 config.json 一样多，
+# 只挡固定名这一个是不够的——一个 glob 全兜住。
+/config.json.bak*
+# 会话、反馈、模型健康、IM 日志、任务工作区、备份。
+# ⚠️ 这些必须锚定到仓库根（前面加 /）：写成裸 `data/` 会连 `ui/src/data/` 一起忽略，
+# 结果 PromptsView 引用的 ui/src/data/marketPrompts.ts 从没进过仓库，别人 clone 下来直接构建失败。
+/data/
+/workspace/
+/backups/
+*.log
+
+# ===== 系统 / 编辑器 =====
+.DS_Store
+.playwright-cli/
+.idea/
+.vscode/
+
+# IDE/工具本地数据与临时快照
+.zcode/
+after-open.yaml
+ui-check.yaml

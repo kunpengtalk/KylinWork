@@ -1,0 +1,148 @@
+name: Build and Release
+
+# 打 tag（v*）即出三平台安装包并建 GitHub Release。
+# 也可以手动跑：Actions → Build and Release → Run workflow，填一个**已存在**的 tag
+# （手动触发时 github.ref_name 是分支名，取不到版本号，所以必须显式给）。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag（如 v0.1.1；该 tag 必须已存在于仓库）"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: 打包 ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: macOS（arm64 + x64）
+            script: dist:mac
+            artifact: kylinwork-macos
+            paths: |
+              dist/*.dmg
+              dist/*.zip
+          - os: windows-latest
+            label: Windows（x64）
+            script: dist:win
+            artifact: kylinwork-windows
+            paths: |
+              dist/*.exe
+          - os: ubuntu-latest
+            label: Linux（x64）
+            script: dist:linux
+            artifact: kylinwork-linux
+            paths: |
+              dist/*.AppImage
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            ui/package-lock.json
+
+      - name: 安装依赖（引擎 + 桌面壳）
+        run: npm ci
+
+      # 版本号的真源是 tag，不是仓库里 package.json 里那个手改的数字：
+      # 两者一旦走岔，安装包文件名、应用内显示的版本、Release 标题会各说各话。
+      # 用 npm version 同步（--no-git-tag-version：不许它反过来建 tag）。
+      - name: 对齐版本号（tag → package.json）
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          if [[ -z "$VERSION" ]]; then
+            echo "::error::拿不到版本号（RELEASE_TAG=${RELEASE_TAG}）"
+            exit 1
+          fi
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          echo "打包版本：$VERSION"
+
+      - name: 安装依赖（前端）
+        run: npm ci
+        working-directory: ui
+
+      # 必须在打包之前：electron-builder 的白名单里是 public/dist，
+      # 只 clone 仓库的话那个目录不存在，打出来的包里前端是空的。
+      - name: 前端构建
+        run: npm run build
+        working-directory: ui
+
+      - name: 打包
+        run: npm run ${{ matrix.script }}
+
+      - name: 列出产物
+        shell: bash
+        run: ls -la dist/
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.paths }}
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: 建 GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+    steps:
+      - name: 下载全部产物
+        uses: actions/download-artifact@v8
+        with:
+          path: assets
+          merge-multiple: true
+
+      # 带预发布标识的 tag（v0.2.0-canary / -beta / -rc）自动标 prerelease
+      - name: 判断是否预发布
+        id: rel
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          if [[ "$VERSION" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 发布
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: assets/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          prerelease: ${{ steps.rel.outputs.prerelease }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

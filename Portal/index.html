@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>KylinWork - 工作新习惯，先让 AI 干</title>
+<meta name="description" content="KylinWork 是跑在你电脑上的 AI 工作台。提出任务，它规划步骤、调用技能和工具，在本地工作空间交付可验收的 PPT、Word、Excel、网页与研究报告——数据不出本机。" />
+<link rel="icon" type="image/png" href="/icon.png" />
+<style>
+  :root {
+    --ink: #1c1f23;
+    --dark: #151823;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --navy: #04163a;
+    --navy-2: #0a2a66;
+    --blue: #1553c4;
+    --blue-bright: #2f7bff;
+    --blue-soft: #eaf2ff;
+    --bg-soft: #f7f9fc;
+    --radius-lg: 24px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    color: var(--ink);
+    background: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, "Inter", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.7;
+    font-size: 16px;
+  }
+  a { color: inherit; text-decoration: none; }
+  button { font-family: inherit; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 0 32px; }
+  img { display: block; }
+  /* Lucide 开源图标（MIT），内嵌 SVG，离线可用 */
+  .svg-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+  .ic { width: 1em; height: 1em; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; display: inline-block; flex-shrink: 0; vertical-align: -0.125em; }
+
+  /* ---------- 导航 ---------- */
+  .nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; height: 56px; backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); background: rgba(9, 20, 44, 0.42); border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .nav-inner { height: 56px; display: flex; align-items: center; gap: 40px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-size: 17px; font-weight: 600; color: #fff; letter-spacing: 0.2px; }
+  .brand img { width: 26px; height: 26px; border-radius: 7px; }
+  .nav-links { display: flex; gap: 30px; font-size: 14px; color: rgba(255,255,255,0.72); font-weight: 400; }
+  .nav-links a { transition: color 0.15s; }
+  .nav-links a:hover { color: #fff; }
+  .nav-cta { margin-left: auto; display: flex; gap: 12px; align-items: center; }
+  .pill { display: inline-flex; align-items: center; justify-content: center; border-radius: 999px; font-weight: 500; cursor: pointer; transition: transform 0.15s, background 0.15s, color 0.15s, border-color 0.15s; white-space: nowrap; }
+  .pill:hover { transform: translateY(-1px); }
+  .pill-white { background: #fff; color: #10131c; font-size: 14px; font-weight: 600; height: 32px; padding: 0 20px; }
+  .pill-ghost { background: transparent; color: rgba(255,255,255,0.9); font-size: 14px; font-weight: 400; height: 32px; padding: 0 15px; border: 1px solid rgba(255,255,255,0.35); }
+  .pill-ghost:hover { border-color: rgba(255,255,255,0.7); color: #fff; }
+
+  /* ---------- Hero ---------- */
+  .hero {
+    position: relative;
+    padding: 64px 0 0;
+    text-align: center;
+    overflow: hidden;
+    color: #fff;
+    background:
+      radial-gradient(900px 460px at 22% -6%, rgba(120, 178, 255, 0.40), transparent 60%),
+      radial-gradient(900px 460px at 82% -4%, rgba(88, 140, 255, 0.35), transparent 60%),
+      radial-gradient(1200px 620px at 50% 118%, rgba(47, 123, 255, 0.28), transparent 62%),
+      linear-gradient(180deg, #04163a 0%, #0a2a66 44%, #1652c2 72%, #2c78ff 100%);
+  }
+  .hero-mark { width: 133px; height: 133px; margin: 148px auto 0; border-radius: 34px; background: rgba(255,255,255,0.94); box-shadow: 0 20px 60px rgba(3, 18, 54, 0.45); padding: 22px; }
+  .hero-mark img { width: 100%; height: 100%; object-fit: contain; border-radius: 14px; }
+  .hero h1 { margin: 40px auto 0; max-width: 860px; font-size: 60px; line-height: 1.3; font-weight: 500; letter-spacing: 1.2px; color: #fff; text-shadow: 0 2px 30px rgba(0,0,0,0.18); }
+  .hero .sub { margin: 22px auto 0; max-width: 954px; font-size: 20px; line-height: 1.5; color: rgba(255,255,255,0.92); font-weight: 400; }
+  .hero-cta { margin-top: 42px; display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; align-items: center; }
+  .pill-lg { border-radius: 43px; font-size: 18px; font-weight: 600; height: 54px; padding: 0 34px; }
+  .hero .pill-ghost.pill-lg { border-color: rgba(255,255,255,0.5); color: #fff; }
+  .hero-note { margin-top: 18px; font-size: 13px; color: rgba(255,255,255,0.72); letter-spacing: 0.2px; }
+  .hero-note b { font-weight: 600; color: rgba(255,255,255,0.92); }
+
+  /* Hero 产品窗口示意 */
+  .hero-app { margin: 64px auto 0; max-width: 1000px; text-align: left; }
+  .appwin {
+    background: #f4f6fb;
+    border: 1px solid rgba(255,255,255,0.35);
+    border-radius: 18px;
+    box-shadow: 0 1px 2px rgba(2,16,50,0.12), 0 40px 90px -24px rgba(1, 10, 40, 0.55);
+    overflow: hidden;
+  }
+  .appwin-bar { display: flex; align-items: center; gap: 8px; height: 42px; padding: 0 16px; background: #fff; border-bottom: 1px solid #e8ecf3; }
+  .appwin-bar i { width: 12px; height: 12px; border-radius: 50%; }
+  .appwin-bar i:nth-child(1) { background: #ff5f57; } .appwin-bar i:nth-child(2) { background: #febc2e; } .appwin-bar i:nth-child(3) { background: #28c840; }
+  .appwin-bar .t { margin-left: 10px; font-size: 13px; color: #8b93a1; font-weight: 500; }
+  .appwin-body { display: flex; height: 500px; }
+  .appwin-side { width: 216px; flex-shrink: 0; border-right: 1px solid #e8ecf3; background: #fbfcfe; padding: 18px 12px; }
+  .appwin-side .h { font-size: 12px; color: #9aa2b1; margin: 16px 4px 8px; letter-spacing: 0.5px; }
+  .appwin-side .h:first-child { margin-top: 2px; }
+  .appwin-side .it { font-size: 13px; color: #4a5160; padding: 8px 10px; border-radius: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .appwin-side .it.on { background: #e3edff; color: #1c5cd8; font-weight: 600; }
+  .appwin-main { flex: 1; min-width: 0; padding: 22px 26px 16px; display: flex; flex-direction: column; gap: 12px; }
+  .bub { max-width: 82%; padding: 11px 15px; border-radius: 12px; font-size: 13.5px; line-height: 1.6; }
+  .bub.me { align-self: flex-end; background: #1c5cd8; color: #fff; border-bottom-right-radius: 4px; }
+  .bub.ai { align-self: flex-start; background: #fff; border: 1px solid #e6eaf2; border-bottom-left-radius: 4px; color: #1c1f23; box-shadow: 0 1px 2px rgba(16,24,40,0.04); }
+  .bub.ai .step { display: flex; gap: 8px; font-size: 12.5px; color: #5b6472; padding: 2px 0; }
+  .bub.ai .ok { color: #16a34a; font-weight: 600; }
+  .bub.ai .ok .ic { width: 13px; height: 13px; }
+  .fileline { margin-top: 8px; display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: #1c5cd8; background: #e8f0ff; border-radius: 7px; padding: 6px 11px; font-weight: 500; }
+  .appwin-input { margin-top: auto; display: flex; align-items: center; justify-content: space-between; border: 1px solid #dde3ec; border-radius: 10px; background: #fff; padding: 12px 16px; font-size: 13px; color: #9aa2b1; }
+  .appwin-input .send { width: 24px; height: 24px; border-radius: 7px; background: #1c5cd8; position: relative; }
+  .appwin-input .send::after { content: ""; position: absolute; left: 50%; top: 50%; width: 7px; height: 7px; border-right: 2px solid #fff; border-bottom: 2px solid #fff; transform: translate(-50%, -60%) rotate(-45deg); }
+
+  /* ---------- 区块通用 ---------- */
+  section { padding: 120px 0 0; }
+  .sec-head h2 { font-size: 36px; line-height: 1.35; font-weight: 600; color: var(--dark); letter-spacing: 0.2px; }
+  .sec-head p { margin-top: 16px; font-size: 20px; line-height: 1.5; color: #1c1f23; max-width: 760px; }
+  .sec-head.center { text-align: center; }
+  .sec-head.center p { margin-left: auto; margin-right: auto; }
+
+  /* ---------- 一、专业技能 ---------- */
+  .skill-media { margin: 48px auto 0; max-width: 1200px; }
+  .skill-panel {
+    display: grid; grid-template-columns: 340px 1fr; gap: 0;
+    background: linear-gradient(180deg, #f3f7ff, #ecf3ff);
+    border: 1px solid #e3ecfb; border-radius: 24px; overflow: hidden;
+    min-height: 600px;
+  }
+  .skill-panel .sp-side { border-right: 1px solid #dbe6f7; background: rgba(255,255,255,0.6); padding: 30px 22px; }
+  .sp-side .sp-h { font-size: 13px; color: #7d8798; margin: 4px 4px 14px; letter-spacing: 0.5px; }
+  .sp-side .sp-item { display: flex; align-items: center; gap: 12px; padding: 13px 12px; border-radius: 12px; font-size: 14.5px; color: #37404f; margin-bottom: 8px; background: #fff; border: 1px solid #e8eef9; }
+  .sp-side .sp-item.on { background: #fff; border-color: #bcd4ff; box-shadow: 0 8px 24px -10px rgba(28,92,216,0.35); color: #1c5cd8; font-weight: 600; }
+  .sp-side .sp-item .ava { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: #e3edff; color: #1c5cd8; flex-shrink: 0; }
+  .sp-side .sp-item .ava .ic { width: 16px; height: 16px; }
+  .sp-side .sp-item.on .ava { background: #1c5cd8; color: #fff; }
+  .sp-main { padding: 34px 38px; display: flex; flex-direction: column; }
+  .sp-main .sp-title { font-size: 22px; font-weight: 600; color: #10152b; }
+  .sp-main .sp-desc { margin-top: 10px; font-size: 15px; color: #566178; line-height: 1.7; }
+  .sp-chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+  .sp-chip { background: #fff; border: 1px solid #e2eaf9; border-radius: 999px; padding: 7px 15px; font-size: 13px; color: #3d4a63; }
+  .sp-output { margin-top: 26px; background: #fff; border: 1px solid #e6edf9; border-radius: 14px; padding: 18px 20px; box-shadow: 0 10px 30px -12px rgba(20,60,150,0.15); }
+  .sp-output .o-h { display: flex; align-items: center; gap: 10px; font-size: 13.5px; font-weight: 600; color: #1c5cd8; }
+  .sp-output .o-h .dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; }
+  .sp-output ul { margin-top: 12px; list-style: none; display: grid; gap: 10px; }
+  .sp-output li { display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: #3d4a63; }
+  .sp-output li .tag { margin-left: auto; font-size: 12px; color: #1c5cd8; background: #e8f0ff; border-radius: 6px; padding: 3px 9px; font-weight: 500; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
+  .sp-output li .tag .ic { width: 12px; height: 12px; }
+
+  /* ---------- 能力总览卡片 ---------- */
+  .caps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 48px; }
+  .caps.four { grid-template-columns: repeat(4, 1fr); }
+  .caps.four .cap { padding: 22px 20px; }
+  .cap { background: #f7f9fd; border: 1px solid #e9eef7; border-radius: 20px; padding: 26px 24px; transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s; }
+  .cap:hover { transform: translateY(-3px); border-color: #cfe0ff; box-shadow: 0 18px 40px -20px rgba(20,60,150,0.25); }
+  .cap .cico { width: 44px; height: 44px; border-radius: 13px; background: #e4edff; color: #1c5cd8; display: grid; place-items: center; }
+  .cap .cico .ic { width: 22px; height: 22px; }
+  .cap h3 { margin-top: 16px; font-size: 17px; font-weight: 600; color: #10152b; }
+  .cap p { margin-top: 8px; font-size: 13.5px; line-height: 1.65; color: #566178; }
+
+  /* ---------- Hero 价值标签 ---------- */
+  .hero-value { margin-top: 26px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+  .hv { display: inline-flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; padding: 8px 16px; font-size: 13.5px; color: rgba(255,255,255,0.92); }
+  .hv .ic { width: 14px; height: 14px; color: #9cc3ff; }
+
+  /* ---------- 技能生态 · 三合一 ---------- */
+  .eco { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 22px; }
+  .eco-item { display: flex; gap: 16px; align-items: flex-start; background: rgba(255,255,255,0.88); border: 1px solid #e3ecf9; border-radius: 18px; padding: 20px 22px; }
+  .eco-item .eico { width: 40px; height: 40px; border-radius: 12px; background: #e4edff; color: #1c5cd8; display: grid; place-items: center; flex-shrink: 0; }
+  .eco-item .eico .ic { width: 20px; height: 20px; }
+  .eco-item b { display: block; font-size: 15px; color: #10152b; }
+  .eco-item span { display: block; margin-top: 5px; font-size: 13px; line-height: 1.6; color: #566178; }
+
+  /* ---------- 权限与安全条 ---------- */
+  .perm { margin-top: 22px; background: #fff; border: 1px solid #e6edf9; border-radius: 18px; padding: 22px 26px; display: grid; grid-template-columns: 220px 1fr; gap: 14px 28px; align-items: center; }
+  .perm .ph { font-size: 15px; font-weight: 600; color: #10152b; display: flex; gap: 10px; align-items: center; }
+  .perm .ph .ic { width: 18px; height: 18px; color: #1c5cd8; }
+  .perm .ph small { display: block; font-weight: 400; font-size: 12px; color: #8b93a1; margin-top: 2px; }
+  .perm .modes, .perm .sec { display: flex; gap: 10px; flex-wrap: wrap; }
+  .perm .mode { background: #f2f6fd; border: 1px solid #e3ebf8; border-radius: 999px; padding: 7px 15px; font-size: 13px; color: #374151; }
+  .perm .mode b { color: #10152b; }
+  .perm .mode .def { opacity: 0.7; }
+  .perm .sec-tag { background: #fff7ed; border: 1px solid #fde4c8; color: #b45309; border-radius: 999px; padding: 7px 15px; font-size: 12.5px; }
+
+  /* ---------- 渠道条 ---------- */
+  .chans { grid-column: 1 / -1; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .chan { display: inline-flex; align-items: center; gap: 7px; background: #f2f6fd; border: 1px solid #e3ebf8; border-radius: 999px; padding: 8px 16px; font-size: 13px; color: #374151; }
+
+  /* ---------- 二、持续交付（tab + 图） ---------- */
+  .deliver { display: grid; grid-template-columns: 380px 1fr; gap: 64px; align-items: start; margin-top: 48px; }
+  .dl-tabs { display: flex; flex-direction: column; gap: 0; }
+  .dl-tab { text-align: left; background: transparent; border: 0; border-bottom: 1px solid rgba(0,0,0,0.10); border-radius: 0; padding: 26px 2px 22px; cursor: pointer; transition: opacity 0.15s; }
+  .dl-tab .t { display: block; font-size: 24px; line-height: 1.3; font-weight: 500; color: #9aa0aa; transition: color 0.15s; }
+  .dl-tab .d { display: block; margin-top: 7px; font-size: 15px; line-height: 1.5; color: #9aa0aa; transition: color 0.15s; }
+  .dl-tab.on .t { color: #14171f; }
+  .dl-tab.on .d { color: #3c4553; }
+  .dl-tab .bar { display: block; height: 2px; width: 100%; background: transparent; margin-top: 16px; transform: scaleX(0); transform-origin: left; transition: transform 0.25s; }
+  .dl-tab.on .bar { background: #14171f; transform: scaleX(1); }
+  .dl-media { position: relative; }
+  .dl-scene { display: none; background: #fff; border: 1px solid #e6ecf5; border-radius: 20px; box-shadow: 0 24px 60px -24px rgba(20,40,90,0.22); padding: 30px 32px; min-height: 540px; }
+  .dl-scene.show { display: block; animation: fadeUp 0.3s ease; }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+  .doc-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .doc-card { border: 1px solid #e6ecf5; border-radius: 16px; overflow: hidden; background: #fff; }
+  .doc-card .prev { height: 170px; display: grid; place-items: center; background: linear-gradient(180deg, #f6f9ff, #eaf1ff); position: relative; }
+  .doc-card .prev .sheet { width: 78px; height: 104px; border-radius: 8px; background: #fff; box-shadow: 0 8px 20px -6px rgba(30,60,130,0.25); display: grid; place-items: center; font-size: 26px; font-weight: 700; color: #1c5cd8; }
+  .doc-card .prev.ppt .sheet { background: linear-gradient(160deg, #fff 0 100%); }
+  .doc-card .prev.sheet .sheet { background: #1a9f58; color: #fff; }
+  .doc-card .prev.xls .sheet { background: #1d8a4e; color: #fff; }
+  .doc-card .meta { padding: 14px 16px; }
+  .doc-card .meta .n { font-size: 14px; font-weight: 600; color: #14171f; }
+  .doc-card .meta .s { margin-top: 4px; font-size: 12.5px; color: #8b93a1; }
+  .dl-caption { margin-top: 18px; display: flex; align-items: center; gap: 10px; font-size: 13.5px; color: #566178; }
+  .dl-caption .ic { width: 16px; height: 16px; color: #16a34a; }
+
+  .report-paper { border: 1px solid #e6ecf5; border-radius: 14px; background: #fff; padding: 34px 38px; }
+  .report-paper .r-tag { display: inline-block; font-size: 12.5px; color: #1c5cd8; background: #e8f0ff; border-radius: 999px; padding: 5px 13px; font-weight: 500; }
+  .report-paper h4 { margin-top: 18px; font-size: 26px; font-weight: 600; color: #10152b; line-height: 1.4; }
+  .report-paper .r-sum { margin-top: 14px; font-size: 14px; line-height: 1.8; color: #4a5160; }
+  .report-paper .r-cites { margin-top: 22px; display: grid; gap: 10px; }
+  .report-paper .r-cites div { font-size: 13px; color: #5b6472; border-left: 3px solid #bcd4ff; padding-left: 12px; line-height: 1.6; }
+  .report-paper .r-foot { margin-top: 24px; padding-top: 18px; border-top: 1px solid #eef2f8; display: flex; justify-content: space-between; font-size: 13px; color: #8b93a1; }
+
+  .schedule { display: grid; gap: 0; }
+  .sch-item { display: flex; gap: 18px; padding: 22px 4px; border-bottom: 1px solid #eef2f8; }
+  .sch-item:last-child { border-bottom: 0; }
+  .sch-time { flex-shrink: 0; width: 150px; font-size: 14px; font-weight: 600; color: #1c5cd8; }
+  .sch-body .t { font-size: 15.5px; font-weight: 600; color: #14171f; }
+  .sch-body .d { margin-top: 6px; font-size: 13.5px; color: #5b6472; line-height: 1.6; }
+  .sch-body .ok { margin-top: 8px; display: inline-block; font-size: 12px; color: #16a34a; background: #e9f9ef; border-radius: 6px; padding: 4px 10px; }
+
+  /* ---------- 三、操作电脑 ---------- */
+  .computer-media { margin: 48px auto 0; max-width: 1200px; }
+  .computer-panel { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 0; background: linear-gradient(180deg, #f3f7ff, #ecf3ff); border: 1px solid #e3ecfb; border-radius: 24px; overflow: hidden; min-height: 580px; }
+  .cp-col { padding: 30px 32px; display: flex; flex-direction: column; }
+  .cp-col + .cp-col { border-left: 1px solid #dbe6f7; }
+  .cp-h { display: flex; align-items: center; gap: 10px; font-size: 13.5px; font-weight: 600; color: #2c3648; margin-bottom: 18px; }
+  .cp-h .ico { width: 28px; height: 28px; border-radius: 8px; background: #1c5cd8; color: #fff; display: grid; place-items: center; }
+  .cp-h .ico .ic { width: 16px; height: 16px; }
+  .cp-files { display: grid; gap: 10px; }
+  .cp-file { display: flex; align-items: center; gap: 12px; background: #fff; border: 1px solid #e6edf9; border-radius: 12px; padding: 12px 14px; }
+  .cp-file .fic { width: 38px; height: 38px; border-radius: 9px; display: grid; place-items: center; flex-shrink: 0; color: #fff; }
+  .cp-file .fic .ic { width: 19px; height: 19px; }
+  .cp-file .fic.xls { background: #18a05c; }
+  .cp-file .fic.doc { background: #2f6fe4; }
+  .cp-file .fic.img { background: #8b5cf6; }
+  .cp-file .fic.web { background: #ea7a1e; }
+  .cp-file .n { font-size: 13.5px; font-weight: 600; color: #1a2030; }
+  .cp-file .m { font-size: 12px; color: #8b93a1; margin-top: 2px; }
+  .cp-file .st { margin-left: auto; font-size: 12px; color: #16a34a; background: #e9f9ef; border-radius: 6px; padding: 4px 9px; white-space: nowrap; }
+  .cp-browser { flex: 1; background: #fff; border: 1px solid #e6edf9; border-radius: 14px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 10px 30px -12px rgba(20,60,150,0.15); }
+  .cp-browser .addr { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #eef2f8; background: #fbfcfe; }
+  .cp-browser .addr .u { flex: 1; background: #f0f3f9; border-radius: 7px; font-size: 12.5px; color: #6b7280; padding: 6px 12px; }
+  .cp-browser .addr .dots span { display: inline-block; width: 12px; height: 12px; border-radius: 50%; margin-right: 5px; background: #e3e8f0; }
+  .cp-web { padding: 22px 26px; flex: 1; }
+  .cp-web .w-bar { height: 14px; width: 42%; border-radius: 7px; background: #dbe6f7; }
+  .cp-web .w-bar.s { width: 30%; margin-top: 12px; }
+  .cp-web .w-grid { margin-top: 20px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .cp-web .w-grid div { height: 72px; border-radius: 10px; background: #edf3fe; border: 1px solid #e2eaf9; }
+  .cp-web .w-card { margin-top: 14px; border: 1px solid #e2eaf9; border-radius: 10px; padding: 14px; background: #f8fbff; }
+  .cp-web .w-card div { height: 9px; border-radius: 5px; background: #dde8fa; margin-bottom: 8px; }
+  .cp-web .w-card div:last-child { margin-bottom: 0; width: 55%; }
+  .cp-foot { margin-top: 16px; display: flex; align-items: center; gap: 10px; font-size: 13px; color: #566178; }
+  .cp-foot .tag { background: #e8f0ff; color: #1c5cd8; border-radius: 6px; padding: 4px 10px; font-size: 12px; font-weight: 600; }
+
+  /* ---------- 四、多端 ---------- */
+  .mobile { display: grid; grid-template-columns: 260px 1fr; gap: 44px 64px; align-items: start; margin-top: 48px; }
+  .mb-tabs { display: flex; flex-direction: column; gap: 4px; }
+  .mb-tab { text-align: left; background: transparent; border: 0; border-radius: 12px; padding: 16px 18px; cursor: pointer; font-size: 24px; color: #9aa0aa; font-weight: 500; transition: color 0.15s, background 0.15s; }
+  .mb-tab .d { display: block; margin-top: 4px; font-size: 13.5px; color: #a4abb6; font-weight: 400; }
+  .mb-tab.on { background: #f0f5ff; color: #14171f; }
+  .mb-tab.on .d { color: #4a5160; }
+  .mb-media { display: grid; place-items: center; }
+  .phone { width: 300px; background: #fff; border: 1px solid #e6ecf5; border-radius: 38px; box-shadow: 0 30px 70px -24px rgba(20,40,90,0.35); padding: 12px; }
+  .phone .scr { border-radius: 28px; overflow: hidden; border: 1px solid #edf1f7; background: #f7f9fc; }
+  .phone .ph-head { display: flex; align-items: center; gap: 12px; padding: 16px 18px; background: linear-gradient(180deg, #1c5cd8, #1750c2); color: #fff; }
+  .phone .ph-head .avatar { width: 38px; height: 38px; border-radius: 50%; background: rgba(255,255,255,0.22); display: grid; place-items: center; }
+  .phone .ph-head .avatar .ic { width: 20px; height: 20px; }
+  .phone .ph-head .t { font-size: 15px; font-weight: 600; }
+  .phone .ph-head .s { font-size: 11.5px; opacity: 0.75; margin-top: 1px; }
+  .phone .ph-body { padding: 16px 14px 18px; min-height: 360px; display: flex; flex-direction: column; gap: 12px; }
+  .chat { max-width: 86%; padding: 11px 13px; border-radius: 14px; font-size: 13px; line-height: 1.6; }
+  .chat.me { align-self: flex-end; background: #1c5cd8; color: #fff; border-bottom-right-radius: 4px; }
+  .chat.ai { align-self: flex-start; background: #fff; border: 1px solid #e5eaf3; border-bottom-left-radius: 4px; color: #22262e; }
+  .chat .f { margin-top: 8px; display: flex; align-items: center; gap: 8px; font-size: 12px; color: #1c5cd8; background: #e8f0ff; border-radius: 7px; padding: 6px 10px; font-weight: 500; }
+  .chat .f .ic { width: 13px; height: 13px; }
+  .phone .ph-foot { padding: 12px 16px; border-top: 1px solid #edf1f7; display: flex; gap: 10px; align-items: center; }
+  .phone .ph-foot .in { flex: 1; height: 34px; border-radius: 17px; background: #fff; border: 1px solid #e3e8f2; }
+  .phone .ph-foot .btn { width: 34px; height: 34px; border-radius: 50%; background: #1c5cd8; position: relative; }
+  .phone .ph-foot .btn::after { content: ""; position: absolute; left: 50%; top: 50%; width: 7px; height: 7px; border-right: 2px solid #fff; border-bottom: 2px solid #fff; transform: translate(-50%, -60%) rotate(-45deg); }
+
+  /* ---------- 五、技能卡片 ---------- */
+  .skills { overflow: hidden; }
+  .marquee { margin-top: 48px; position: relative; -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); }
+  .marquee .track { display: flex; width: max-content; animation: scrollX 70s linear infinite; }
+  .marquee .track .scard { margin-right: 20px; }
+  .marquee:hover .track { animation-play-state: paused; }
+  @keyframes scrollX { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+  .scard { width: 352px; height: 160px; flex-shrink: 0; background: rgba(16, 24, 40, 0.045); border: 1px solid transparent; border-radius: 24px; padding: 30px; cursor: pointer; text-align: left; transition: transform 0.2s, background 0.2s, border-color 0.2s, box-shadow 0.2s; }
+  .scard:hover { background: rgba(16, 24, 40, 0.07); border-color: rgba(16,24,40,0.06); transform: translateY(-3px); box-shadow: 0 16px 34px -18px rgba(16,24,40,0.28); }
+  .scard .t { font-size: 18px; font-weight: 600; color: #10131c; }
+  .scard .d { margin-top: 8px; font-size: 14px; line-height: 1.55; color: #4a5160; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .scard .c { margin-top: 14px; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #9aa2b1; }
+  .scard .c svg { width: 13px; height: 13px; }
+  .scard.copied .c { color: #16a34a; }
+
+  /* ---------- CTA ---------- */
+  .cta { text-align: center; padding: 100px 0; }
+  .cta h2 { font-size: 40px; font-weight: 600; color: var(--dark); letter-spacing: 0.2px; }
+  .cta p { margin: 18px auto 0; font-size: 20px; color: #1c1f23; }
+  .cta .hero-cta { margin-top: 40px; }
+  .pill-black { background: #10131c; color: #fff; border-radius: 43px; font-size: 18px; font-weight: 600; height: 52px; padding: 0 34px; }
+  .pill-black:hover { background: #000; box-shadow: 0 14px 30px -12px rgba(16,19,28,0.5); }
+  .cta .pill-white-line { background: #fff; color: #10131c; border: 1.5px solid #d8dee8; border-radius: 43px; font-size: 18px; font-weight: 600; height: 52px; padding: 0 34px; }
+  .cta-note { margin-top: 18px; font-size: 13px; color: #8b93a1; }
+
+  /* ---------- 页脚 ---------- */
+  footer { border-top: 1px solid #eef1f6; padding: 34px 0 40px; text-align: center; }
+  footer .f-brand { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #2b3040; }
+  footer .f-brand img { width: 18px; height: 18px; border-radius: 5px; }
+  footer .f-meta { margin-top: 10px; font-size: 13px; color: #8b93a1; }
+  footer .f-links { margin-top: 12px; display: flex; gap: 24px; justify-content: center; font-size: 13px; color: #6b7280; }
+  footer .f-links a:hover { color: #1c5cd8; }
+
+  /* ---------- 响应式 ---------- */
+  @media (max-width: 1024px) {
+    .hero h1 { font-size: 44px; }
+    .deliver, .mobile { grid-template-columns: 1fr; gap: 32px; }
+    .skill-panel { grid-template-columns: 1fr; }
+    .skill-panel .sp-side { border-right: 0; border-bottom: 1px solid #dbe6f7; }
+    .computer-panel { grid-template-columns: 1fr; }
+    .cp-col + .cp-col { border-left: 0; border-top: 1px solid #dbe6f7; }
+    .caps, .caps.four { grid-template-columns: repeat(2, 1fr); }
+    .eco { grid-template-columns: 1fr; }
+    .perm { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 760px) {
+    .nav-links { display: none; }
+    .hero h1 { font-size: 34px; letter-spacing: 0.4px; }
+    .hero .sub { font-size: 17px; }
+    .hero-mark { width: 100px; height: 100px; margin-top: 108px; }
+    .appwin-side { display: none; }
+    .appwin-body { height: 420px; }
+    section { padding-top: 80px; }
+    .sec-head h2 { font-size: 28px; }
+    .sec-head p { font-size: 16.5px; }
+    .doc-grid { grid-template-columns: 1fr; }
+    .cta h2 { font-size: 30px; }
+    .scard { width: 290px; height: 150px; padding: 24px; }
+    .caps, .caps.four { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<svg class="svg-sprite" aria-hidden="true">
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></symbol>
+  <symbol id="i-pen" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></symbol>
+  <symbol id="i-palette" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></symbol>
+  <symbol id="i-file-text" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></symbol>
+  <symbol id="i-bot" viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></symbol>
+  <symbol id="i-file-up" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M12 12v6"/><path d="m9 15 3-3 3 3"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-list-checks" viewBox="0 0 24 24"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></symbol>
+  <symbol id="i-file-check" viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="m9 15 2 2 4-4"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></symbol>
+  <symbol id="i-smartphone" viewBox="0 0 24 24"><rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><path d="M18 8h1a4 4 0 0 1 4 4v8a4 4 0 0 1-4 4H5a4 4 0 0 1-4-4v-8a4 4 0 0 1 4-4h1"/><path d="M8 8V6a4 4 0 0 1 8 0v2"/><circle cx="12" cy="14" r="1"/></symbol>
+  <symbol id="i-network" viewBox="0 0 24 24"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3"/><path d="M12 12V8"/></symbol>
+  <symbol id="i-package" viewBox="0 0 24 24"><path d="m7.5 4.27 9 5.15"/><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></symbol>
+  <symbol id="i-gauge" viewBox="0 0 24 24"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.48 12H2"/></symbol>
+  <symbol id="i-brain" viewBox="0 0 24 24"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/></symbol>
+  <symbol id="i-paw" viewBox="0 0 24 24"><circle cx="11" cy="4" r="2"/><circle cx="18" cy="8" r="2"/><circle cx="20" cy="16" r="2"/><path d="M9 10a5 5 0 0 1 5 5v3.5a3.5 3.5 0 0 1-6.84 1.045Q6.52 17.48 4.46 16.84A3.5 3.5 0 0 1 5.5 10Z"/></symbol>
+</svg>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="/portal/"><img src="/icon.png" alt="KylinWork" /> KylinWork</a>
+    <nav class="nav-links">
+      <a href="#features">产品功能</a>
+      <a href="#deliver">持续交付</a>
+      <a href="#mobile">移动端</a>
+      <a href="#download">下载</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="pill pill-ghost" href="/">打开应用</a>
+      <a class="pill pill-white" href="#download">下载客户端</a>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- ============ Hero ============ -->
+  <section class="hero">
+    <div class="hero-mark"><img src="/icon.png" alt="KylinWork logo" /></div>
+    <div class="wrap">
+      <h1>工作新习惯，先让 KylinWork 干</h1>
+      <p class="sub">
+        从汇报 PPT、数据表格，到深度调研、定时任务，统统交给 KylinWork。它把任务拆成步骤、调用技能和工具一步步完成，最后交付能直接打开验收的文件——PPT、Word、Excel、网页、报告、图片、视频，都在你指定的文件夹里。
+      </p>
+      <div class="hero-cta">
+        <a class="pill pill-white pill-lg" href="#download">下载客户端</a>
+        <a class="pill pill-ghost pill-lg" href="/">打开应用</a>
+      </div>
+      <div class="hero-value">
+        <span class="hv"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg>数据不出本机</span>
+        <span class="hv"><svg class="ic" aria-hidden="true"><use href="#i-cpu"/></svg>多模型自由切换</span>
+        <span class="hv"><svg class="ic" aria-hidden="true"><use href="#i-file-check"/></svg>交付能打开的真文件</span>
+        <span class="hv"><svg class="ic" aria-hidden="true"><use href="#i-list-checks"/></svg>目标自动验收</span>
+      </div>
+      <p class="hero-note">支持 <b>macOS</b>（Apple Silicon / Intel）· <b>数据保存在本机</b> · <b>免费使用</b></p>
+    </div>
+
+    <div class="hero-app">
+      <div class="wrap">
+        <div class="appwin">
+          <div class="appwin-bar"><i></i><i></i><i></i><span class="t">KylinWork · 竞品分析报告</span></div>
+          <div class="appwin-body">
+            <div class="appwin-side">
+              <div class="h">任务</div>
+              <div class="it on">竞品分析报告</div>
+              <div class="it">项目周报更新</div>
+              <div class="it">官网落地页改版</div>
+              <div class="h">工作空间</div>
+              <div class="it">项目集 · 数字人</div>
+              <div class="it">运维 · 2026</div>
+            </div>
+            <div class="appwin-main">
+              <div class="bub me">帮我出一份 Q3 复盘 PPT，数据用这个 Excel</div>
+              <div class="bub ai">
+                <div class="step"><span class="ok"><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg></span> 读取「销售数据.xlsx」，清洗并汇总</div>
+                <div class="step"><span class="ok"><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg></span> 生成对比图表与叙事线</div>
+                <div class="step"><span class="ok"><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg></span> 排版成 12 页 PPT 并终审</div>
+                <span class="fileline">交付 · Q3复盘.pptx（12 页）</span>
+              </div>
+              <div class="bub ai">
+                <div class="step"><span class="ok"><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg></span> 汇总表已另存</div>
+                <span class="fileline">交付 · 销售汇总.xlsx</span>
+              </div>
+              <div class="appwin-input"><span>继续追问，或提出新任务…</span><span class="send"></span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 核心能力总览 ============ -->
+  <section id="capabilities">
+    <div class="wrap sec-head">
+      <h2>从任务到文件，一站式全流程</h2>
+      <p>它不是聊天机器人——会规划、会动手、会交付，还会自己安排重复的工作。六件每天都用得上的事，一次说清。</p>
+    </div>
+    <div class="wrap caps">
+      <div class="cap">
+        <div class="cico"><svg class="ic" aria-hidden="true"><use href="#i-list-checks"/></svg></div>
+        <h3>任务全流程执行</h3>
+        <p>自然语言 → 规划 → 工具循环 → 交付文件，每一步实时可见。Ask / Plan / Goal / Craft 四种模式：只问答、只出计划、目标验收、完整执行，输入框旁一键切换。</p>
+      </div>
+      <div class="cap">
+        <div class="cico"><svg class="ic" aria-hidden="true"><use href="#i-file-check"/></svg></div>
+        <h3>交付真文件</h3>
+        <p>PPT / Word / Excel / 网页 / 图片 / 视频真实写入磁盘，用 Office 就能继续编辑。声称写了文件却不在磁盘上，会被拦下来重做——不是聊天记录。</p>
+      </div>
+      <div class="cap">
+        <div class="cico"><svg class="ic" aria-hidden="true"><use href="#i-cpu"/></svg></div>
+        <h3>多模型自由切换</h3>
+        <p>DeepSeek / 通义 Qwen / 智谱 GLM / Kimi / OpenRouter / Ollama 本地模型，界面点一下就切、不用重启；每个对话还可以单独指定自己的模型。</p>
+      </div>
+      <div class="cap">
+        <div class="cico"><svg class="ic" aria-hidden="true"><use href="#i-clock"/></svg></div>
+        <h3>定时任务</h3>
+        <p>cron 到点自动执行，结果推到飞书 / 微信 / QQ。合上盖子睡过头了会自动补跑（只补最近一次、最多 24 小时），同一个任务绝不叠跑。</p>
+      </div>
+      <div class="cap">
+        <div class="cico"><svg class="ic" aria-hidden="true"><use href="#i-smartphone"/></svg></div>
+        <h3>多端远程派活</h3>
+        <p>飞书、QQ、微信、企业微信、钉钉，在外发条消息就能指挥这台电脑，干完把文件推回聊天。所有渠道汇成一条对话历史，重启不丢。</p>
+      </div>
+      <div class="cap">
+        <div class="cico"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg></div>
+        <h3>数据留在本机</h3>
+        <p>自托管，会话、文件、API Key 全在自己机器上；默认只监听 127.0.0.1，不主动外发。备份就是把整个数据文件夹拷走。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 一、专业技能 ============ -->
+  <section id="features">
+    <div class="wrap sec-head">
+      <h2>专业技能，让复杂工作更简单</h2>
+      <p>内置 12 位专家与 4 个专家团，外加技能、连接器、插件三合一广场。主 Agent 拿到复杂任务会自己拆，把「调研 → 分析 → 写作 → 做 PPT」逐段委派给对应专家接力完成——每一步做了什么、产出了什么，实时可见。</p>
+    </div>
+    <div class="wrap skill-media">
+      <div class="skill-panel">
+        <div class="sp-side">
+          <div class="sp-h">选一个专家，把任务交给它</div>
+          <div class="sp-item on"><span class="ava"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg></span>调研专家</div>
+          <div class="sp-item"><span class="ava"><svg class="ic" aria-hidden="true"><use href="#i-chart"/></svg></span>数据分析师</div>
+          <div class="sp-item"><span class="ava"><svg class="ic" aria-hidden="true"><use href="#i-pen"/></svg></span>写作专家</div>
+          <div class="sp-item"><span class="ava"><svg class="ic" aria-hidden="true"><use href="#i-palette"/></svg></span>设计专家</div>
+          <div class="sp-item"><span class="ava"><svg class="ic" aria-hidden="true"><use href="#i-target"/></svg></span>策略顾问</div>
+          <div class="sp-item"><span class="ava"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg></span>创建专属专家</div>
+        </div>
+        <div class="sp-main">
+          <div class="sp-title">调研专家 · 正在执行</div>
+          <div class="sp-desc">自动编排「拆问题 → 检索 → 读原文 → 汇总 → 出报告」的专业流程，主 Agent 用 delegate_to_expert 委派接力；任务中的每一步、产出的每个文件都实时可见，可随时叫停和验收。</div>
+          <div class="sp-chips">
+            <span class="sp-chip">问题拆解</span>
+            <span class="sp-chip">多源检索</span>
+            <span class="sp-chip">原文精读</span>
+            <span class="sp-chip">引用标注</span>
+            <span class="sp-chip">报告排版</span>
+          </div>
+          <div class="sp-output">
+            <div class="o-h"><span class="dot"></span>目标验收清单 · 每轮执行后自动核对</div>
+            <ul>
+              <li>覆盖 5 家主要竞品 <span class="tag"><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>已完成</span></li>
+              <li>包含数据对比图表 <span class="tag"><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>已完成</span></li>
+              <li>PPT 排版终审 <span class="tag">下一轮</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <!-- 技能生态 · 三合一 -->
+      <div class="eco">
+        <div class="eco-item">
+          <span class="eico"><svg class="ic" aria-hidden="true"><use href="#i-file-text"/></svg></span>
+          <div><b>技能系统</b><span>一个 Markdown 文件就是一个技能，同目录还能放脚本和模板。改完存盘，下一条任务就是新的，不用重启。</span></div>
+        </div>
+        <div class="eco-item">
+          <span class="eico"><svg class="ic" aria-hidden="true"><use href="#i-network"/></svg></span>
+          <div><b>MCP 连接器</b><span>标准 Model Context Protocol，本地 stdio 和远程 Streamable HTTP 都能接，连接器注册后工具自动进入任务的可调用范围。</span></div>
+        </div>
+        <div class="eco-item">
+          <span class="eico"><svg class="ic" aria-hidden="true"><use href="#i-package"/></svg></span>
+          <div><b>Agent Plugins</b><span>支持开放插件标准，一个包同时带技能和连接器，粘个 GitHub 地址就装、装完立刻生效，在别的客户端也能用同一个包。</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 二、从复杂任务，到持续交付 ============ -->
+  <section id="deliver">
+    <div class="wrap sec-head">
+      <h2>从复杂任务，到持续交付</h2>
+      <p>深入研究、生成专业工作成果，并让重复工作自动完成。长任务撞到步数或时长上限会自动续跑——靠工作目录里的进度档从断点继续，绝不重做已完成的部分。</p>
+    </div>
+    <div class="wrap deliver">
+      <div class="dl-tabs" id="dlTabs">
+        <button class="dl-tab on" data-scene="s1"><span class="t">Office 成果</span><span class="d">生成可编辑的 PPT、Word、Excel 与网页，交付就能打开继续编辑</span><span class="bar"></span></button>
+        <button class="dl-tab" data-scene="s2"><span class="t">深入调研</span><span class="d">联网检索 + 内置浏览器真渲染读网页，产出带引用来源的研究报告</span><span class="bar"></span></button>
+        <button class="dl-tab" data-scene="s3"><span class="t">定时任务</span><span class="d">按 cron 自动执行，把日报晨报推到 IM，错过自动补跑、绝不叠跑</span><span class="bar"></span></button>
+      </div>
+      <div class="dl-media">
+        <div class="dl-scene show" id="s1">
+          <div class="doc-grid">
+            <div class="doc-card"><div class="prev"><div class="sheet">PPT</div></div><div class="meta"><div class="n">Q3 复盘报告.pptx</div><div class="s">12 页 · 图表 6 处 · 已排版</div></div></div>
+            <div class="doc-card"><div class="prev sheet"><div class="sheet">XLS</div></div><div class="meta"><div class="n">销售汇总.xlsx</div><div class="s">6 个 Sheet · 公式原生可编辑</div></div></div>
+            <div class="doc-card"><div class="prev xls"><div class="sheet">DOC</div></div><div class="meta"><div class="n">项目周报.docx</div><div class="s">图文混排 · 目录可更新</div></div></div>
+          </div>
+          <div class="dl-caption"><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>全部真实写入磁盘：Word / Excel / PPT 原生可编辑，网页在本机起服务、手机扫码就能看</div>
+        </div>
+        <div class="dl-scene" id="s2">
+          <div class="report-paper">
+            <span class="r-tag">深度调研报告</span>
+            <h4>国内 AI 陪伴产品赛道研究</h4>
+            <div class="r-sum">本报告基于 23 个公开来源整理：从产品形态、商业模式、目标人群三个维度对比 5 家主要玩家，并给出进入策略建议。所有引用均标注来源链接，可点击溯源。</div>
+            <div class="r-cites">
+              <div>① 艾瑞咨询：2025 年 AI 陪伴市场白皮书，访问于 2026-08-20</div>
+              <div>② 某公司 2026 年 Q2 财报电话会纪要（来源标注于对话中）</div>
+              <div>③ 应用商店评论抽样：TOP20 产品各 200 条</div>
+            </div>
+            <div class="r-foot"><span>交付：AI陪伴赛道研究报告.md / .docx</span><span>全文 8,432 字</span></div>
+          </div>
+        </div>
+        <div class="dl-scene" id="s3">
+          <div class="schedule">
+            <div class="sch-item"><div class="sch-time">每天 09:00</div><div class="sch-body"><div class="t">行业新闻晨报</div><div class="d">抓取 30 个行业源，汇总成晨报推送</div><span class="ok">已推送至飞书群</span></div></div>
+            <div class="sch-item"><div class="sch-time">每周五 18:00</div><div class="sch-body"><div class="t">项目周报生成</div><div class="d">汇总工作空间改动，生成图文周报</div><span class="ok">上周已完成 · 6 篇</span></div></div>
+            <div class="sch-item"><div class="sch-time">每月 1 日</div><div class="sch-body"><div class="t">上月数据月报</div><div class="d">读取销售表格，输出 Excel + PPT</div><span class="ok">本机存储，错过自动补跑</span></div></div>
+          </div>
+          <div class="dl-caption"><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>错过会补跑：只补最近一次、最多往回 24 小时；同一任务不叠跑，上一轮没跑完自动跳过</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 三、操作电脑 ============ -->
+  <section id="computer">
+    <div class="wrap sec-head">
+      <h2>操作电脑，完成复杂任务</h2>
+      <p>KylinWork 可以读取、创建和修改电脑里的本地文件，自动打开网页、填写信息、完成跨页面操作——动态页面用内置浏览器真渲染一遍再读。数据不出本机，命令和删除都过闸门。</p>
+    </div>
+    <div class="wrap computer-media">
+      <div class="computer-panel">
+        <div class="cp-col">
+          <div class="cp-h"><span class="ico"><svg class="ic" aria-hidden="true"><use href="#i-folder"/></svg></span>工作空间 · 本机文件夹</div>
+          <div class="cp-files">
+            <div class="cp-file"><span class="fic xls"><svg class="ic" aria-hidden="true"><use href="#i-chart"/></svg></span><div><div class="n">数据分析及可视化.xlsx</div><div class="m">相对路径读写，脚本 cwd 跟随</div></div><span class="st">已落盘</span></div>
+            <div class="cp-file"><span class="fic doc"><svg class="ic" aria-hidden="true"><use href="#i-file-text"/></svg></span><div><div class="n">项目周报.docx</div><div class="m">工作空间「任务_月日_标题/」归档</div></div><span class="st">已落盘</span></div>
+            <div class="cp-file"><span class="fic img"><svg class="ic" aria-hidden="true"><use href="#i-image"/></svg></span><div><div class="n">架构图.png</div><div class="m">gen_diagram 本机离线渲染</div></div><span class="st">已落盘</span></div>
+            <div class="cp-file"><span class="fic web"><svg class="ic" aria-hidden="true"><use href="#i-code"/></svg></span><div><div class="n">落地页.html</div><div class="m">本机起服务，手机扫码可看</div></div><span class="st">已上线</span></div>
+          </div>
+          <div class="cp-foot"><span class="tag">数据不出本机</span>默认只监听 127.0.0.1，不主动外发</div>
+        </div>
+        <div class="cp-col">
+          <div class="cp-h"><span class="ico"><svg class="ic" aria-hidden="true"><use href="#i-globe"/></svg></span>内置浏览器 · 真渲染再读取</div>
+          <div class="cp-browser">
+            <div class="addr"><span class="dots"><span></span><span></span><span></span></span><span class="u">登录页 —— 正在填写表单…</span></div>
+            <div class="cp-web">
+              <div class="w-bar"></div>
+              <div class="w-bar s"></div>
+              <div class="w-grid"><div></div><div></div><div></div></div>
+              <div class="w-card"><div></div><div></div><div></div></div>
+            </div>
+          </div>
+          <div class="cp-foot"><span class="tag">跨页面操作</span>动态页面用内置 Chrome 真渲染读取，能爬登录后的数据</div>
+        </div>
+      </div>
+      <div class="perm">
+        <div class="ph"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg>权限档位<small>输入框旁一键切换，业界通行做法</small></div>
+        <div class="modes">
+          <span class="mode"><b>只看不动</b></span>
+          <span class="mode"><b>每步都问</b></span>
+          <span class="mode"><b>自动改文件</b><span class="def"> · 默认</span></span>
+          <span class="mode"><b>全自动</b><span class="def"> · 留黑名单兜底</span></span>
+        </div>
+        <div class="ph"><svg class="ic" aria-hidden="true"><use href="#i-lock"/></svg>安全中心<small>每一项都是真闸门，不是摆设</small></div>
+        <div class="sec">
+          <span class="sec-tag">命令审批</span>
+          <span class="sec-tag">文件黑名单</span>
+          <span class="sec-tag">网络白名单</span>
+          <span class="sec-tag">删文件保护</span>
+          <span class="sec-tag">审计日志</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 四、多端 ============ -->
+  <section id="mobile">
+    <div class="wrap sec-head">
+      <h2>不在电脑旁，也能远程派活</h2>
+      <p>接入微信、飞书、QQ 或企业微信，外出时发一条消息就能指挥这台电脑，干完把文件推回聊天里。侧栏的「助理模式」是总控台：所有渠道汇成一条对话历史，落盘保存、重启不丢。</p>
+    </div>
+    <div class="wrap mobile">
+      <div class="mb-tabs" id="mbTabs">
+        <button class="mb-tab on" data-ch="微信">微信<span class="d">扫码即连 · 无需公网</span></button>
+        <button class="mb-tab" data-ch="飞书">飞书<span class="d">应用凭证 · 长连接</span></button>
+        <button class="mb-tab" data-ch="QQ">QQ<span class="d">填入凭证即用</span></button>
+        <button class="mb-tab" data-ch="企业微信">企业微信<span class="d">回调接入</span></button>
+      </div>
+      <div class="mb-media">
+        <div class="phone">
+          <div class="scr">
+            <div class="ph-head"><span class="avatar" id="phAvatar"><svg class="ic" aria-hidden="true"><use href="#i-bot"/></svg></span><div><div class="t" id="phTitle">KylinWork</div><div class="s" id="phState">在线 · 本机执行中</div></div></div>
+            <div class="ph-body">
+              <div class="chat me">把刚才那份周报的数据更新一下，再发我一份</div>
+              <div class="chat ai">已读取工作空间的周报文件，更新 3 处数据并重新生成图表。<span class="f"><svg class="ic" aria-hidden="true"><use href="#i-file-up"/></svg>项目周报-更新版.docx</span></div>
+              <div class="chat ai">另外按昨天的约定，9 点的晨报已经发到群里了。</div>
+              <div class="chat me">收到，晚上记得把官网落地页也改一版</div>
+              <div class="chat ai">好的，任务已加入队列，完成后会推给你。</div>
+            </div>
+            <div class="ph-foot"><span class="in"></span><span class="btn"></span></div>
+          </div>
+        </div>
+      </div>
+      <div class="chans">
+        <span class="chan">飞书 · 长连接，填凭证即用</span>
+        <span class="chan">微信 iLink · 扫码即连</span>
+        <span class="chan">QQ · 官方机器人</span>
+        <span class="chan">企业微信 · 自建应用</span>
+        <span class="chan">微信公众号</span>
+        <span class="chan">钉钉 · 群机器人推送</span>
+        <span class="chan">通用 Webhook · 桥接一切</span>
+        <span class="chan">飞书扫码授权 · 以你本人身份读日历 / 文档</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 五、丰富的技能 ============ -->
+  <section id="skills" class="skills">
+    <div class="wrap sec-head center">
+      <h2>丰富的技能，覆盖多种工作场景</h2>
+      <p>从深度调研、竞品分析，到公众号推文、小红书卡片、数据可视化。内置 13 个开箱即用的技能；一个 Markdown 文件就是一个新技能，改完下一条任务就生效，也可以在技能广场安装别人分享的。</p>
+    </div>
+    <div class="marquee">
+      <div class="track" id="skillTrack"></div>
+    </div>
+  </section>
+
+  <!-- ============ 更多能力 ============ -->
+  <section id="more">
+    <div class="wrap sec-head">
+      <h2>不止于此，把 Agent 用顺手的小事</h2>
+      <p>评测、账本、记忆、宠物——这些不显眼的能力，是用久了才会喜欢上的细节。</p>
+    </div>
+    <div class="wrap caps four">
+      <div class="cap">
+        <div class="cico"><svg class="ic" aria-hidden="true"><use href="#i-gauge"/></svg></div>
+        <h3>智能体评测</h3>
+        <p>把整个 agent 当黑盒考：15 道分层任务，pass@1 均值看能不能、k 次全过看稳不稳。可设为基线，之后每轮自动逐题对比、退步点名。</p>
+      </div>
+      <div class="cap">
+        <div class="cico"><svg class="ic" aria-hidden="true"><use href="#i-activity"/></svg></div>
+        <h3>模型健康账本</h3>
+        <p>每次任务按模型记成败（滚动近 20 次），选模型菜单里直接看「近 N 次任务 X 成」，连挂 ≥2 次标红——坏的渠道一眼看清，不再盲猜。</p>
+      </div>
+      <div class="cap">
+        <div class="cico"><svg class="ic" aria-hidden="true"><use href="#i-brain"/></svg></div>
+        <h3>双层记忆</h3>
+        <p>手写区全局共享、界面直接编辑；条目区由 agent 自己用 remember 记录，按账号隔离、超量丢最旧。越用越了解你的习惯。</p>
+      </div>
+      <div class="cap">
+        <div class="cico"><svg class="ic" aria-hidden="true"><use href="#i-paw"/></svg></div>
+        <h3>桌面宠物</h3>
+        <p>桌角一只透明小挂件，实时显示 agent 在干什么：跳起来 + 通知 = 有问题要问你，撒花 = 完成，掉汗 = 出错。还能用你的照片现场做一只。</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CTA ============ -->
+  <section class="cta" id="download">
+    <div class="wrap">
+      <h2>把 KylinWork 引入你的日常办公</h2>
+      <p>本地运行、多模型自由切换，让每一项工作都更轻松。</p>
+      <div class="hero-cta">
+        <a class="pill pill-black" href="/dist-release/KylinWork-0.1.0-mac-arm64.dmg">下载客户端</a>
+        <a class="pill pill-white-line" href="/">打开应用</a>
+      </div>
+      <p class="cta-note">免费开源 · 数据不出本机 · 支持 macOS（Apple Silicon / Intel）</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span class="f-brand"><img src="/icon.png" alt="" /> KylinWork</span>
+    <div class="f-meta">© 2026 KylinWork · 跑在你自己电脑上的 AI 工作台</div>
+    <div class="f-links">
+      <a href="/">打开应用</a>
+      <a href="/portal/">落地页</a>
+      <a href="#download">下载</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // 持续交付 Tab 切换
+  var dlTabs = document.getElementById("dlTabs");
+  dlTabs.addEventListener("click", function (e) {
+    var tab = e.target.closest(".dl-tab");
+    if (!tab) return;
+    [].forEach.call(dlTabs.children, function (t) { t.classList.remove("on"); });
+    tab.classList.add("on");
+    [].forEach.call(document.querySelectorAll(".dl-scene"), function (s) { s.classList.remove("show"); });
+    document.getElementById(tab.getAttribute("data-scene")).classList.add("show");
+  });
+
+  // 多端 Tab 切换
+  var mbTabs = document.getElementById("mbTabs");
+  mbTabs.addEventListener("click", function (e) {
+    var tab = e.target.closest(".mb-tab");
+    if (!tab) return;
+    [].forEach.call(mbTabs.children, function (t) { t.classList.remove("on"); });
+    tab.classList.add("on");
+    document.getElementById("phTitle").textContent = tab.getAttribute("data-ch") + " · KylinWork";
+  });
+
+  // 技能卡片（跑马灯内容，复制两份实现无缝循环）
+  (function () {
+    var skills = [
+      { t: "深度调研报告", d: "调研一下国内 AI 陪伴产品赛道，出一份有引用来源的报告。" },
+      { t: "竞品分析", d: "对比 5 家竞品的定价与功能，输出一张可编辑的对比表。" },
+      { t: "周报生成", d: "把本周工作按项目分组整理成周报，附数据图表。" },
+      { t: "PPT 设计", d: "把这份大纲做成 15 页项目路演 PPT，数据用这个表格。" },
+      { t: "数据可视化", d: "读取这个 Excel，画出上线三个月以来的转化漏斗，顺便配张架构图。" },
+      { t: "Excel 报表", d: "汇总各门店销售数据，出一份带透视表的月度报表。" },
+      { t: "公众号推文", d: "把这篇周报改写成公众号推文，配好标题和排版，推送草稿箱。" },
+      { t: "小红书卡片", d: "把产品卖点做成 9 张小红书图文卡片，统一视觉风格。" },
+      { t: "网页生成", d: "做一个带留言板和本地存储的官网落地页，本机起服务、手机能看。" },
+      { t: "飞书文档", d: "把这份会议纪要转成飞书文档，保持表格、加粗和行内代码。" },
+      { t: "图文成片", d: "把这篇教程做成配音 + 字幕 + 拼接的短视频。" },
+      { t: "资料库问答", d: "把资料丢进资料库，让它自己查文档回答客户的常见问题。" },
+      { t: "长文档写作", d: "把会议记录扩写成万字的项目文档，配目录和章节。" },
+      { t: "图片配图", d: "按正文主题生成风格统一的配图，尺寸和比例可指定。" },
+      { t: "语音配音", d: "把文字稿转成自然语音，指定音色、语速和语调。" },
+      { t: "技能创作", d: "让 KylinWork 读一遍你的工作流程，自己动手写一个新技能。" }
+    ];
+    var track = document.getElementById("skillTrack");
+    function render(sk) {
+      return sk.map(function (s) {
+        var el = document.createElement("button");
+        el.className = "scard";
+        el.innerHTML = '<span class="t"></span><span class="d"></span><span class="c"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>复制</span>';
+        el.querySelector(".t").textContent = s.t;
+        el.querySelector(".d").textContent = s.d;
+        el.addEventListener("click", function () {
+          var done = function () {
+            el.classList.add("copied");
+            el.querySelector(".c").lastChild.textContent = "已复制";
+            setTimeout(function () { el.classList.remove("copied"); el.querySelector(".c").lastChild.textContent = "复制"; }, 1600);
+          };
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(s.d).then(done, done);
+          } else {
+            done();
+          }
+        });
+        return el;
+      });
+    }
+    var set = render(skills);
+    set.forEach(function (el) { track.appendChild(el); });
+    set.forEach(function (el) { track.appendChild(el.cloneNode(true)); });
+  })();
+</script>
+</body>
+</html>
