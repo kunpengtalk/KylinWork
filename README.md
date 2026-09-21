@@ -50,6 +50,11 @@
 
 ![任务首页](./docs/images/ui-home.png)
 
+**成果文件——右侧就是交付台，产出直接看。** 上面的需求跑完，右侧列出全部产物并标出本轮新增，
+点开即可在应用内预览：网页成果直接渲染成带图表的看板，Word / Excel / PPT / PDF 也能看，不依赖本机装没装 Office：
+
+![成果文件预览](./docs/images/ui-artifacts-preview.png)
+
 **设置 · 模型云服务——十家服务商内置，填 Key 即用。** 当场发真实请求验活，还能一键拉取模型列表：
 
 ![模型云服务](./docs/images/ui-settings-models.png)
