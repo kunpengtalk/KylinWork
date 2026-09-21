@@ -71,7 +71,7 @@ function openSession(id: string) {
     </aside>
 
     <!-- 内容区：布局路由时渲染子路由页面；页面内嵌使用时渲染 @default 插槽 -->
-    <!-- overflow-y-auto 是「文档型」页面（专家广场、自动化这类长卡片页）唯一的滚动条：
+    <!-- overflow-y-auto 是「文档型」页面（专家·技能·连接器、自动化这类长卡片页）唯一的滚动条：
          它们自己不建滚动容器，只把内容铺高，全靠这里兜住。ChatView 这类自带滚动区的
          页面内容不会溢出，因此不会多出第二条滚动条。 -->
     <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto bg-transparent" :class="onRight && 'md:order-1'">

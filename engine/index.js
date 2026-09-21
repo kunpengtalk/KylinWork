@@ -284,6 +284,82 @@ function autosaveSession(id, minGapMs = 5000) {
 // IM 会话跟网页会话分开存（data/im-sessions/<键>.json），重启不丢上下文
 const imSessions = createImSessionStore({ dir: dataPath("data", "im-sessions") });
 
+/**
+ * 定时 / 自动任务开一条真正的会话。
+ * <p>
+ * 以前定时任务只调 runtime.runTask 拿一个 finalText，过程一个字都不进会话表：
+ * 界面上点「立即跑」只弹一句「已触发」，左侧任务列表里空空如也，用户根本不知道
+ * 它跑没跑、跑到哪了、产出去哪了。现在每次执行都登记成一条 session（id 前缀 sch_），
+ * transcript 照常落盘 —— 于是它和普通对话一样出现在列表里、能点进去看直播和回放，
+ * 也能被「停止」。
+ * @returns {{ sessionId: string, project: string, done: Promise<string> }}
+ */
+function startScheduleSession({ item, run, baseDir, workspaceDir, runtime: rt }) {
+  const sessionId = "sch_" + run.id;
+  const sess = getSession(sessionId);
+  const owner = account.defaultUser();
+  // 这条会话属于哪个工作空间：按任务实际生效的目录反查项目名，查不到就退回目录名。
+  // 侧栏按工作空间过滤会话，这一格填错，任务就会跑到别人的分组下面。
+  const wsDir = path.resolve(workspaceDir || getWorkspaceDir());
+  const proj = (config.projects || []).find((p) => p && path.resolve(String(p.dir || "")) === wsDir);
+  const project = proj ? proj.name : path.basename(wsDir) || activeProject();
+  const title = String(item.name || item.task || "定时任务").slice(0, 40);
+  const at = new Date().toISOString();
+  sess.title = title;
+  sess.source = "schedule";
+  sess.schedule_id = item.id;
+  sess.project = project;
+  sess.dir = baseDir || sess.dir || null;
+  if (owner && !sess.user) sess.user = owner.username;
+  sess.history.push({ role: "user", content: item.task });
+  sess.transcript.push({ type: "user", text: item.task, at });
+  const asstEvents = [];
+  sess.transcript.push({ type: "assistant", events: asstEvents, at });
+  // runState 的形状与 /api/chat 里那份保持一致：续流（/api/chat/stream/:id）和
+  // 停止（/api/chat/stop）都认这一份，少一个字段那条路径就会静默失效
+  const runState = { ctrl: new AbortController(), interject: [], asks: new Map(), subscribers: new Set(), events: asstEvents };
+  // 事件一边进 transcript，一边推给续流进来的订阅者。少了推送这一半，用户打开这条
+  // 正在跑的会话只能看到「连上那一刻的回放」，之后再没有任何动静——看起来就像卡死了。
+  const send = (ev) => {
+    const line = `data: ${JSON.stringify(ev)}\n\n`;
+    for (const sub of runState.subscribers) { try { sub.write(line); } catch {} }
+  };
+  activeRuns.set(sessionId, runState);
+  persistRunning();
+  saveSession(sessionId);
+  // 无人值守：不传 askUser，agent 的 ask_user 会按「没人在线」走默认判断（见 agent.js）
+  const emitFn = recordingEmit(send, asstEvents, sessionId);
+  const done = (async () => {
+    try {
+      const r = await rt.runTask({
+        taskLabel: title,
+        baseDir,
+        history: sess.history,
+        emit: emitFn,
+        stopSignal: runState.ctrl.signal,
+        getInterject: () => runState.interject.splice(0),
+      });
+      return (r && r.finalText) || "完成";
+    } catch (e) {
+      // 跑挂了也要在会话里留一条错误：不然点进这条会话只有一个空气泡，
+      // 用户看不出是「还在跑」还是「早失败了」，而失败原因只躺在运行记录里没人会去翻
+      const msg = String((e && e.message) || e);
+      asstEvents.push({ type: "error", message: msg });
+      send({ type: "error", message: msg });
+      throw e;
+    } finally {
+      activeRuns.delete(sessionId);
+      persistRunning();
+      // 收工就把续流连接关掉：前端的「这一轮结束了」是靠流读完触发的，
+      // 不关的话那条会话会永远显示成「运行中」，直到用户重进对话页才对账纠正
+      for (const sub of runState.subscribers) { try { sub.end(); } catch {} }
+      runState.subscribers.clear();
+      try { saveSession(sessionId); } catch (e) { console.warn(`[定时任务] 会话落盘失败（${sessionId}）：${e.message}`); }
+    }
+  })();
+  return { sessionId, project, done };
+}
+
 /** 包装 emit：把事件同时记录到 transcript（文本增量合并，跳过噪音事件），顺便中途存盘 */
 // ---------- Goal 目标模式 ----------
 // 用户给一个目标，先拆成可验收的标准，跑完一轮就对着标准验收，没达标自动再跑（最多 GOAL_MAX_ROUNDS 轮）。
@@ -468,7 +544,7 @@ function recordingEmit(send, events, sessionId) {
       // 只留这一批真正变更的那几条（回放时 renderFiles 被 isReplaying 挡住，用不到全量）
       const chg = ev.changed || [];
       if (chg.length) events.push({ type: "files", changed: chg, files: (ev.files || []).filter((f) => chg.includes(f.name)) });
-    } else if (["tool_use", "tool_result", "parallel", "expert_start", "expert_done", "error", "limit", "auto_continue", "failover", "sleep", "trim", "compact", "usage", "interject", "credits", "sources", "ask_user", "ask_answer", "milestones"].includes(ev.type)) {
+    } else if (["tool_use", "tool_result", "parallel", "expert_start", "expert_done", "error", "limit", "auto_continue", "failover", "sleep", "trim", "compact", "usage", "interject", "credits", "sources", "citations", "ask_user", "ask_answer", "milestones"].includes(ev.type)) {
       events.push(ev);
       // 一步走完就是个存盘点：跑了半小时的任务不该因为一次崩溃从头再来
       if (sessionId && ev.type === "tool_result") autosaveSession(sessionId);
@@ -2608,6 +2684,8 @@ app.post("/api/chat", async (req, res) => {
       if (r.text) {
         kbCtx = r.text;
         send({ type: "status", text: `已从知识库检索到 ${r.hits.length} 段相关内容` });
+        // 引用元数据随事件发给界面：答复底下的「来源」就靠它，重开对话回放也还在
+        if (r.citations && r.citations.length) emitFn({ type: "citations", citations: r.citations });
       } else {
         send({ type: "status", text: "知识库未检索到相关内容" });
       }
@@ -2655,6 +2733,7 @@ app.post("/api/chat", async (req, res) => {
           user: user ? user.username : undefined,
           projectContext: (projectContextOf(activeProject()) || "") + kbCtx + goalCtx,
           expertContext: expertCtx,
+          kbIds,
           stopSignal: runState.ctrl.signal,
           getInterject: () => runState.interject.splice(0),
           // ask_user 工具的等待端：回答从 /api/chat/answer 进来；超时或用户点停止都放行 null
@@ -2825,7 +2904,17 @@ app.get("/api/chat/stream/:id", (req, res) => {
 });
 
 // 历史会话回放
+// 文件根本不存在时要说实话。会话是按数据目录存的（装机态 ~/KylinWork、开发态仓库目录、
+// KYLINWORK_HOME 可覆盖），而前端侧栏那份历史索引存在 localStorage 里、不跟着数据目录走——
+// 换过运行方式之后索引里的 id 这边就是没有的。以前这种情况一律回空 transcript（HTTP 200），
+// 界面只能显示「没有可恢复的内容（可能引擎重启时未落盘）」，把「换了数据目录」误报成「数据丢了」。
 app.get("/api/session/:id", (req, res) => {
+  if (!fs.existsSync(sessFile(req.params.id))) {
+    return res.status(404).json({
+      error: "引擎里没有这条会话（它的内容可能不在当前数据目录下）",
+      missing: true,
+    });
+  }
   const s = getSession(req.params.id);
   res.json({ transcript: s.transcript, dir: s.dir || null, model: s.model || null, goal: s.goal || null });
 });
@@ -3090,8 +3179,12 @@ async function main() {
   for (const p of badPlugins) console.warn(`[插件] ${p.name} 装不上: ${p.error}`);
   runtime = createAgentRuntime({ config, llm, mcpManager, experts, expertTeams });
 
+  const scheduleRuntime = accountedRuntime(runtime, "schedule");
   scheduler = createScheduler({
-    runtime: accountedRuntime(runtime, "schedule"),
+    runtime: scheduleRuntime,
+    // 每次执行开一条真正的会话，运行记录里带上它的 id —— 前端据此把定时任务
+    // 也列进左侧任务列表（见 scheduler.js 的 startSession）
+    startSession: (args) => startScheduleSession({ ...args, runtime: scheduleRuntime }),
     onResult: (item, text) =>
       notify.pushBots(config, `【KylinWork·定时任务】${item.name}\n${(text || "").slice(0, 800)}`),
   });

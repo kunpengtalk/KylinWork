@@ -72,15 +72,14 @@ const mcp = ref<{ servers?: McpServer[]; total_tools?: number }>({})
 const loading = ref(true)
 const keyword = ref('')
 
-/** 当前 Tab：支持 ?tab=skills / connectors 直达（侧栏「专家·技能·连接器」带参进入） */
-const route = useRoute()
+/** 当前 Tab：支持 ?tab=skills / connectors 直达（侧栏「专家·技能·连接器」带参进入） */const route = useRoute()
 const router = useRouter()
 const activeTab = ref(String(route.query.tab || 'experts'))
 
 /**
- * URL 才是准：侧栏「专家广场」和「专家·技能·连接器」指的都是这个路由，
- * 只是 query 不一样；而 query 变化不会重建组件，所以不跟一把的话，
- * 在页内点侧栏另一个入口是「点了没反应」。带上 ?tab= 的深链同理。
+ * URL 才是准：进入本页只有一个入口（侧栏「专家·技能·连接器」带 ?tab=），
+ * 但页内切 Tab、以及外部深链都会改 query；而 query 变化不会重建组件，
+ * 所以不跟一把的话，页内点另一个 Tab 后 URL 与实际内容会对不上。带上 ?tab= 的深链同理。
  */
 watch(
   () => String(route.query.tab || 'experts'),
@@ -89,7 +88,7 @@ watch(
   },
 )
 
-/** 切 Tab 顺手写回 URL：状态可分享，也让侧栏那两个入口随时点得动 */
+/** 切 Tab 顺手写回 URL：状态可分享，也让深链与页内 Tab 始终一致 */
 function setTab(v: string) {
   activeTab.value = v
   void router.replace({ query: { ...route.query, tab: v } })

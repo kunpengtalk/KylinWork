@@ -225,6 +225,21 @@ const TOOL_DEFS = [
     },
   },
   {
+    name: "knowledge_search",
+    description:
+      "在「知识库」里检索资料段落（向量 + 关键词混合召回，可能带重排）。和资料库是两回事：资料库是跨项目共享的参考文件夹（library_*），知识库是按库组织、可被对话选中的资料集。\n" +
+      "什么时候用：用户勾选了知识库、或问题需要依据用户上传的资料（产品手册、规范、指南、文档）时。开场给的那段「知识库检索结果」只是按用户这句话召回的前几段，**需要更多或换角度找资料时，用它继续检索**——比如要找某个配置项、某段参数、某个章节的细节。\n" +
+      "检索范围默认是本次对话勾选的知识库；一个都没勾时检索全部知识库。",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "要检索的问题或关键词。写具体一点（专有名词、字段名、章节名）召回更准" },
+        top_k: { type: "number", description: "返回几段，默认 6，最多 20" },
+      },
+      required: ["query"],
+    },
+  },
+  {
     name: "fetch_url",
     description:
       "抓取一个 URL 的内容（最多 20000 字符）。带真实浏览器请求头，网页会去掉导航/页脚只留正文，JSON 接口原样返回——查资料和直接调数据接口都用它。静态 HTML 是空壳时会自动用内置浏览器渲染一遍再读；地址是 PDF/图片/压缩包时会自动下载到工作目录并告诉你文件名（不会把二进制乱码返回给你）。要抓多个地址就在同一轮里一次性发多个 fetch_url，系统会并发执行。",
@@ -978,6 +993,41 @@ function libraryRead(name) {
   const base = path.basename(String(name || ""));
   if (!base || base.startsWith(".")) throw new Error("文件名不合法");
   return fs.readFileSync(path.join(LIB_DIR, base), "utf8").slice(0, 50000);
+}
+
+/**
+ * 知识库检索工具：让 agent 在跑任务过程中能主动查资料，而不是只吃开场注入的那几段。
+ * <p>
+ * 懒 require：knowledge.js 会读 config / 建索引 / 调向量接口，放在文件顶部加载会把它拖进
+ * 每个只用到文件的场景（比如纯 CLI 跑一次 list_files）。
+ * 检索范围：本次对话勾选的库优先；一个都没勾就查全部（此时在结果里说明，免得 agent 以为查的是某个库）。
+ */
+async function knowledgeSearch(input, opts = {}) {
+  const knowledge = require("./knowledge");
+  const q = String((input && input.query) || "").trim();
+  if (!q) return { content: "请给出要检索的问题（query）。", isError: true };
+  const picked = (Array.isArray(opts.kbIds) ? opts.kbIds : []).filter(Boolean);
+  const bases = knowledge.listBases();
+  if (!bases.length) return { content: "还没有建任何知识库，知识库里没有可检索的资料。", isError: false };
+  const ids = picked.filter((id) => bases.some((b) => b.id === id));
+  const scope = ids.length ? ids : bases.map((b) => b.id);
+  const topK = Math.max(1, Math.min(20, Number(input.top_k) || 6));
+  const d = await knowledge.searchDetailed(q, scope);
+  const scopeNote = ids.length
+    ? ""
+    : `（本次对话没有勾选知识库，已检索全部 ${scope.length} 个库：${bases.map((b) => b.name).join("、")}）`;
+  if (!d.hits.length) {
+    return { content: `知识库里没有检索到与「${q}」相关的内容。换个说法或更具体的关键词再试。${scopeNote}`, isError: false };
+  }
+  const hits = d.hits.slice(0, topK);
+  const body = hits
+    .map((h, i) => {
+      const span = h.seq_end > h.seq ? `第 ${h.seq + 1}-${h.seq_end + 1} 段` : `第 ${h.seq + 1} 段`;
+      return `[${i + 1}] ${h.kb} · ${h.file}${h.heading ? ` › ${h.heading}` : ""}（${span}）\n${h.text}`;
+    })
+    .join("\n\n---\n\n");
+  const notes = (d.notes || []).length ? `\n\n（${d.notes.join("；")}）` : "";
+  return { content: `检索方式：${d.mode}${d.model ? ` · ${d.model}` : ""}\n共 ${hits.length} 段：\n\n${body}${notes}${scopeNote}`, isError: false };
 }
 
 const LIST_SKIP = new Set([".tmp", "node_modules", ".git", ".DS_Store", ".history"]);
@@ -2203,6 +2253,8 @@ async function executeTool(name, input, opts = {}) {
         return { content: libraryList(), isError: false };
       case "library_read":
         return { content: libraryRead(input.name), isError: false };
+      case "knowledge_search":
+        return await knowledgeSearch(input, opts);
       case "look_at_image":
         return await lookAtImage(opts, input, timeoutMs, resolveFile);
       case "generate_image":

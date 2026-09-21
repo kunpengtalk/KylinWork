@@ -56,9 +56,12 @@ function createKnowledgeRouter({ knowledge, rawUpload, uploadName }) {
     }
   });
 
+  // 改库：名称 / 描述 / 每库配置（embedding、rerank、切块与召回参数）。
+  // embeddings_reset=true 表示换了向量模型、旧向量已清空，界面要提示「重建索引」。
   router.post("/api/knowledge/bases/:id", (req, res) => {
     try {
-      res.json({ ok: true, base: knowledge.updateBase(req.params.id, req.body || {}) });
+      const r = knowledge.updateBase(req.params.id, req.body || {});
+      res.json({ ok: true, base: r.base, embeddings_reset: !!r.embeddings_reset });
     } catch (e) {
       fail(res)(e);
     }
@@ -72,10 +75,43 @@ function createKnowledgeRouter({ knowledge, rawUpload, uploadName }) {
     }
   });
 
-  router.get("/api/knowledge/bases/:id/files", (req, res) => {
+  // 库里的文档（文件 / 笔记 / 网页）。/files 是历史路径，和 /docs 等价
+  const listDocsHandler = (req, res) => {
     try {
       if (!knowledge.getBase(req.params.id)) return res.status(404).json({ error: "知识库不存在" });
-      res.json({ files: knowledge.listFiles(req.params.id) });
+      const docs = knowledge.listDocs(req.params.id);
+      res.json({ files: docs, docs, total: docs.length });
+    } catch (e) {
+      fail(res)(e);
+    }
+  };
+  router.get("/api/knowledge/bases/:id/files", listDocsHandler);
+  router.get("/api/knowledge/bases/:id/docs", listDocsHandler);
+
+  // 一个文档的分块明细（界面上「查看分块」）
+  router.get("/api/knowledge/bases/:id/chunks", (req, res) => {
+    try {
+      const docId = String(req.query.doc || "").trim();
+      if (!docId) return res.status(400).json({ error: "缺少 doc 参数" });
+      res.json({ chunks: knowledge.listChunks(req.params.id, docId) });
+    } catch (e) {
+      fail(res)(e);
+    }
+  });
+
+  // 加一条笔记（正文内联，不落磁盘文件）
+  router.post("/api/knowledge/bases/:id/note", (req, res) => {
+    try {
+      res.json({ ok: true, doc: knowledge.addNote(req.params.id, req.body || {}) });
+    } catch (e) {
+      fail(res)(e);
+    }
+  });
+
+  // 加一个网页：服务端抓正文后入库
+  router.post("/api/knowledge/bases/:id/web", async (req, res) => {
+    try {
+      res.json({ ok: true, doc: await knowledge.addWeb(req.params.id, req.body || {}) });
     } catch (e) {
       fail(res)(e);
     }
@@ -103,8 +139,17 @@ function createKnowledgeRouter({ knowledge, rawUpload, uploadName }) {
       }
       if (!name) return res.status(400).json({ error: "缺少文件名" });
       const saved = await knowledge.saveFile(id, name, buf);
-      const job = knowledge.enqueueIndex(id, saved.name);
-      res.json({ ok: true, file: saved.name, size: saved.size, queued: true, status: job.state });
+      const job = knowledge.enqueueIndex(id, saved.id);
+      res.json({ ok: true, file: saved.name, id: saved.id, size: saved.size, queued: true, status: job.state });
+    } catch (e) {
+      fail(res)(e);
+    }
+  });
+
+  // 删文档：/docs/:docId 是通用路径（文件 / 笔记 / 网页都走它）；/files/:name 保留兼容
+  router.delete("/api/knowledge/bases/:id/docs/:docId", (req, res) => {
+    try {
+      res.json(knowledge.deleteDoc(req.params.id, decodeURIComponent(req.params.docId)));
     } catch (e) {
       fail(res)(e);
     }
@@ -118,14 +163,24 @@ function createKnowledgeRouter({ knowledge, rawUpload, uploadName }) {
     }
   });
 
-  // 重新入库：给文件就重排那一个，不给就重排整库（换了向量模型后重跑）
+  // 重新入库：给 doc 就重排那一个，不给就重排整库（换了向量模型 / 改了切块参数后重跑）
   router.post("/api/knowledge/bases/:id/reindex", async (req, res) => {
     try {
       const { id } = req.params;
       if (!knowledge.getBase(id)) return res.status(404).json({ error: "知识库不存在" });
-      const name = String((req.body || {}).name || "").trim();
-      const r = name ? knowledge.enqueueIndex(id, name) : knowledge.enqueueReindex(id);
-      res.json({ ok: true, queued: name ? 1 : r.queued, status: knowledge.queueStats() });
+      const doc = String((req.body || {}).doc || (req.body || {}).name || "").trim();
+      const r = doc ? knowledge.enqueueIndex(id, doc) : knowledge.enqueueReindex(id);
+      res.json({ ok: true, queued: doc ? 1 : r.queued, status: knowledge.queueStats() });
+    } catch (e) {
+      fail(res)(e);
+    }
+  });
+
+  // 补齐向量：只对「有分块但没向量」的文档重排（换了向量模型把向量清空后，不必重切块）
+  router.post("/api/knowledge/bases/:id/embed-missing", (req, res) => {
+    try {
+      const r = knowledge.enqueueEmbedMissing(req.params.id);
+      res.json({ ok: true, queued: r.queued, status: knowledge.queueStats() });
     } catch (e) {
       fail(res)(e);
     }
@@ -135,9 +190,9 @@ function createKnowledgeRouter({ knowledge, rawUpload, uploadName }) {
   router.post("/api/knowledge/bases/:id/retry", (req, res) => {
     try {
       const { id } = req.params;
-      const name = String((req.body || {}).name || "").trim();
-      if (!name) return res.status(400).json({ error: "缺少文件名" });
-      res.json({ ok: true, job: knowledge.retryJob(id, name), status: knowledge.queueStats() });
+      const doc = String((req.body || {}).doc || (req.body || {}).name || "").trim();
+      if (!doc) return res.status(400).json({ error: "缺少文档" });
+      res.json({ ok: true, job: knowledge.retryJob(id, doc), status: knowledge.queueStats() });
     } catch (e) {
       fail(res)(e);
     }
@@ -152,7 +207,10 @@ function createKnowledgeRouter({ knowledge, rawUpload, uploadName }) {
       const k = Math.max(1, Math.min(50, Number(top_k) || d.hits.length || 6));
       res.json({
         hits: d.hits.slice(0, k).map((h) => ({
+          kb_id: h.kb_id,
           kb: h.kb,
+          doc_id: h.doc_id,
+          kind: h.kind || "file",
           file: h.file,
           heading: h.heading || "",
           seq: h.seq,

@@ -1,0 +1,377 @@
+/**
+ * Markdown 正文排版 —— 全站一处定义。
+ *
+ * 两种用法，同一套字级、同一套表格与代码块长相：
+ *   .kw-doc  右侧成果面板里的文档预览（当一篇文档读）
+ *   .kw-md   对话里的助手正文（vue-stream-markdown 的输出，当一段答复读）
+ *
+ * 为什么必须放全局而不是各自写在组件里：
+ * 1) 对话正文的样式来自 vue-stream-markdown，它给元素挂的是一堆 Tailwind 工具类
+ *    （.text-2xl / .my-4 / .border …），选择器权重是 .stream-markdown .text-2xl（0,2,0）。
+ *    组件里的 scoped 规则只能靠 `:deep()` 勉强打平，而这里是全局、且不在任何 @layer 里
+ *    —— 未分层的规则天生压过 Tailwind 的分层工具类。权重上写成 .kw-md .stream-markdown X
+ *    再补一层，稳过库里的默认值。
+ * 2) 这两处正文此前是两套长相：右侧 13.5px 文档、对话 16px 网页文章。同一个窗口里
+ *    两种正文字号，看起来像两个产品拼起来的。
+ *
+ * 颜色一律取全站设计变量（--foreground / --border / --muted …），深浅色自动跟随。
+ */
+
+/* ======================================================================
+   一、文档预览 .kw-doc
+   ====================================================================== */
+
+.kw-doc {
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+}
+/* 首尾不留悬挂边距，否则正文像是被切掉了一截 */
+.kw-doc > :first-child {
+  margin-top: 0;
+}
+.kw-doc > :last-child {
+  margin-bottom: 0;
+}
+
+.kw-doc p {
+  margin: 0.75em 0;
+}
+
+.kw-doc h1 {
+  margin: 0 0 0.9em;
+  font-size: 1.5em;
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: -0.015em;
+}
+.kw-doc h2 {
+  margin: 1.7em 0 0.7em;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid var(--border);
+  font-size: 1.16em;
+  font-weight: 650;
+  line-height: 1.45;
+  letter-spacing: -0.008em;
+}
+.kw-doc h3 {
+  margin: 1.35em 0 0.55em;
+  font-size: 1.04em;
+  font-weight: 600;
+}
+.kw-doc h4,
+.kw-doc h5,
+.kw-doc h6 {
+  margin: 1.1em 0 0.4em;
+  color: var(--muted-foreground);
+  font-size: 1em;
+  font-weight: 600;
+}
+
+/* ======================================================================
+   二、对话正文 .kw-md（vue-stream-markdown）
+   ----------------------------------------------------------------------
+   库里的默认排版是按「网页文章」定的：16px 正文、1.8 行高、2xl 的标题，
+   在一屏对话里又松又散。这里压到和文档预览同一套字级，只留必要的留白。
+   ====================================================================== */
+
+.kw-md .stream-markdown {
+  padding-block: 0.125rem;
+  font-size: 14.5px;
+  line-height: 1.75;
+  color: var(--foreground);
+  /* 库默认 white-space: pre-wrap + 不折长词，中文长串和 URL 会顶破右侧 */
+  overflow-wrap: anywhere;
+}
+
+.kw-md .stream-markdown p {
+  margin: 0.62em 0;
+}
+
+.kw-md .stream-markdown h1 {
+  margin: 1.35em 0 0.55em;
+  font-size: 1.32em;
+  font-weight: 650;
+  line-height: 1.4;
+  letter-spacing: -0.012em;
+}
+.kw-md .stream-markdown h2 {
+  margin: 1.25em 0 0.5em;
+  font-size: 1.14em;
+  font-weight: 650;
+  line-height: 1.45;
+  letter-spacing: -0.006em;
+}
+.kw-md .stream-markdown h3 {
+  margin: 1.1em 0 0.45em;
+  font-size: 1.02em;
+  font-weight: 600;
+}
+.kw-md .stream-markdown h4,
+.kw-md .stream-markdown h5,
+.kw-md .stream-markdown h6 {
+  margin: 0.9em 0 0.35em;
+  color: var(--muted-foreground);
+  font-size: 1em;
+  font-weight: 600;
+}
+
+.kw-md .stream-markdown ul,
+.kw-md .stream-markdown ol {
+  margin: 0.55em 0;
+  padding-left: 1.4em;
+}
+.kw-md .stream-markdown ul {
+  list-style: disc;
+}
+.kw-md .stream-markdown ol {
+  list-style: decimal;
+}
+.kw-md .stream-markdown li {
+  margin: 0.25em 0;
+}
+.kw-md .stream-markdown li::marker {
+  color: var(--muted-foreground);
+}
+.kw-md .stream-markdown li > ul,
+.kw-md .stream-markdown li > ol {
+  margin: 0.25em 0;
+}
+
+/* 表格：和文档预览同一套（横线 + 圆角外框，不用满格网格）。
+   库默认只给了 border-collapse，列宽靠内容硬撑，第一列常被挤成「排查现/状」两行。 */
+/* 不要再给 table 加 display:block。库本身已经把 table 包在一个 overflow-x-auto 的 div 里
+   （见 vue-stream-markdown 的 table 容器），滚动由它负责；一旦把 table 改成 block，
+   里面会生成一个匿名的表格盒，按 shrink-to-fit 收缩——实测只占 269px，右边一大块留白，
+   而且「排查现状」这类中文标签会被压到一个字宽折成两行。留成真实表格 + width:100%，
+   由自动表格布局按内容分配宽度，这些问题一起消失。 */
+.kw-md .stream-markdown table {
+  width: 100%;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.95em;
+}
+/* 注意选择器里的 table：库里给单元格的样式写作
+   `.stream-markdown :is(.\[\&_td\]\:px-4 td)`，:is() 取其中权重最高的那一项，
+   于是 .stream-markdown(类) + .px-4(类) + td(元素) = 0,2,1，和 `.kw-md .stream-markdown td`
+   打平——而它所在的样式表是随路由分片后加载的，同级就归它赢（实测单元格 padding 一直是 16px）。
+   多写一层 table 把元素计数抬到 2，权重 0,2,2 才真的压得住。 */
+.kw-md .stream-markdown table th,
+.kw-md .stream-markdown table td {
+  padding: 0.45em 0.8em;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  font-size: 1em;
+  overflow-wrap: break-word;
+
+  /* 中文可以在任意两个字之间断开，于是「最小内容宽度」只有 1 个字，自动表格布局就把窄列
+     压到只剩两三个字宽——「排查现状」被折成「排查现 / 状」。给个下限兜住：
+     6em ≈ 4 个汉字 + 左右内边距。列多到真放不下时，外层容器横向滚动。 */
+  min-width: 6em;
+}
+.kw-md .stream-markdown thead th {
+  background: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.kw-md .stream-markdown tbody tr:last-child td {
+  border-bottom: 0;
+}
+.kw-md .stream-markdown tbody tr:nth-child(even) {
+  background: color-mix(in oklab, var(--muted) 40%, transparent);
+}
+
+.kw-md .stream-markdown pre {
+  margin: 0.8em 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.kw-md .stream-markdown code {
+  font-size: 0.9em;
+}
+
+.kw-md .stream-markdown blockquote {
+  margin: 0.85em 0;
+  padding: 0.55em 0.9em;
+  border-left: 3px solid color-mix(in oklab, var(--primary) 55%, transparent);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in oklab, var(--muted) 55%, transparent);
+  color: var(--muted-foreground);
+}
+.kw-md .stream-markdown blockquote p {
+  margin: 0.3em 0;
+}
+
+.kw-md .stream-markdown hr {
+  margin: 1.4em 0;
+  border-top: 1px solid var(--border);
+}
+
+.kw-md .stream-markdown img {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+/* ======================================================================
+   三、两者共用：列表 / 表格 / 代码 / 引用 / 勾选清单
+   ====================================================================== */
+
+.kw-doc ul,
+.kw-md .stream-markdown ul {
+  list-style: disc;
+}
+.kw-doc ol,
+.kw-md .stream-markdown ol {
+  list-style: decimal;
+}
+
+.kw-doc ul,
+.kw-doc ol {
+  margin: 0.65em 0;
+  padding-left: 1.4em;
+}
+/* `- [ ]` / `- [x]`：markdown-it 不认，靠 ArtifactsPanel 里的插件塞占位 span 来画方框 */
+.kw-doc .kw-task-item {
+  margin-left: -1.3em;
+  list-style: none;
+}
+.kw-doc .kw-task {
+  display: inline-block;
+  width: 0.95em;
+  height: 0.95em;
+  margin-right: 0.45em;
+  vertical-align: -0.12em;
+  border: 1.5px solid var(--border);
+  border-radius: 4px;
+}
+.kw-doc .kw-task-done {
+  border-color: var(--primary);
+  background: var(--primary);
+}
+.kw-doc .kw-task-done::after {
+  display: block;
+  width: 0.24em;
+  height: 0.48em;
+  margin: -0.08em auto 0;
+  border: solid var(--primary-foreground);
+  border-width: 0 0.15em 0.15em 0;
+  transform: rotate(42deg);
+  content: '';
+}
+
+.kw-doc code,
+.kw-md .stream-markdown code {
+  padding: 0.12em 0.38em;
+  border-radius: 4px;
+  background: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.kw-doc pre {
+  margin: 1em 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--muted);
+}
+.kw-doc pre code {
+  padding: 0;
+  background: none;
+}
+
+/* 文档预览这边没有库帮忙包容器，横向滚动由 decorateDoc 补的 .kw-tablewrap 承担：
+   窄表铺满、宽表横向滚，同样不把 table 变成 block。 */
+.kw-tablewrap {
+  margin: 1em 0;
+  overflow-x: auto;
+  border-radius: 10px;
+}
+.kw-tablewrap > table {
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+}
+.kw-doc table {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.95em;
+}
+.kw-doc th,
+.kw-doc td {
+  padding: 0.5em 0.8em;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+  /* 单元格里用 break-word 而不是继承下来的 anywhere：anywhere 会让列的最小宽度缩到一个字符，
+     于是「10」这种短内容会被折成上下两行。break-word 只在整词放不下时才断，长 URL 照样能折。 */
+  overflow-wrap: break-word;
+
+  /* 中文可以在任意两个字之间断开，于是「最小内容宽度」只有 1 个字，自动表格布局就把窄列
+     压到只剩两三个字宽——「排查现状」被折成「排查现 / 状」。给个下限兜住：
+     6em ≈ 4 个汉字 + 左右内边距。列多到真放不下时，外层容器横向滚动。 */
+  min-width: 6em;
+}
+.kw-doc thead th {
+  background: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.kw-doc tbody tr:last-child td {
+  border-bottom: 0;
+}
+.kw-doc tbody tr:nth-child(even) {
+  background: color-mix(in oklab, var(--muted) 40%, transparent);
+}
+
+.kw-doc blockquote {
+  margin: 1em 0;
+  padding: 0.6em 0.9em;
+  border-left: 3px solid color-mix(in oklab, var(--primary) 55%, transparent);
+  border-radius: 0 8px 8px 0;
+  background: color-mix(in oklab, var(--muted) 55%, transparent);
+  color: var(--muted-foreground);
+}
+.kw-doc blockquote p {
+  margin: 0.35em 0;
+}
+
+.kw-doc hr {
+  margin: 1.6em 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.kw-doc a,
+.kw-md .stream-markdown a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklab, var(--primary) 40%, transparent);
+  text-underline-offset: 2px;
+}
+.kw-doc a:hover,
+.kw-md .stream-markdown a:hover {
+  text-decoration-color: currentColor;
+}
+
+.kw-doc img {
+  max-width: 100%;
+  height: auto;
+  margin: 0.8em 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+/* 第一列通常是「项目 / 事项 / 工具名」这类短标签，中文折行最伤可读性（「配置管理 / 工具」）。
+   给首列再宽一档：够放 6 个汉字，再长的才折。多列表格靠外层容器横向滚动兜底。 */
+.kw-doc th:first-child,
+.kw-doc td:first-child,
+.kw-md .stream-markdown table th:first-child,
+.kw-md .stream-markdown table td:first-child {
+  min-width: 8em;
+}

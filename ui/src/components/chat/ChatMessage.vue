@@ -17,15 +17,19 @@ import { Badge } from '@/components/ui/badge'
 import {
   Brain,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   Circle,
   CircleCheck,
   Copy,
   Download,
   ExternalLink,
+  FileText,
+  Link2,
   ListChecks,
   MoreHorizontal,
   RotateCcw,
+  StickyNote,
   ThumbsDown,
   ThumbsUp,
   TriangleAlert,
@@ -93,16 +97,46 @@ const toolRows = computed<ToolRow[]>(() => {
 })
 
 const FOLD_MIN_ROWS = 4
+/** 失败的步骤数：有失败就绝不折叠——出问题的那几步正是用户要去看的东西 */
+const failedSteps = computed(() => props.msg.tools.filter((t) => t.isError).length)
 /** 只折已完成的轮次：正在跑的步骤必须看得见，那是"它在动"的证据 */
-const foldSteps = computed(() => props.msg.done && toolRows.value.length > FOLD_MIN_ROWS)
+const foldSteps = computed(() => props.msg.done && !failedSteps.value && toolRows.value.length > FOLD_MIN_ROWS)
 const stepsOpen = ref(false)
-const stepLabel = computed(() => {
+/** 整轮到底跑了多久：首尾相减，不是各步耗时之和（并发那几步是叠在一起的，加起来会虚高） */
+const stepDuration = computed(() => {
   const list = props.msg.tools
   const from = list[0]?.startedAt
   const to = list[list.length - 1]?.endedAt
-  const dur = from && to && to > from ? formatDuration(to - from) : ''
-  return dur ? `工作了 ${dur} · ${list.length} 步` : `${list.length} 步`
+  return from && to && to > from ? formatDuration(to - from) : ''
 })
+const stepSummary = computed(() => {
+  const parts = [`${props.msg.tools.length} 步`]
+  if (stepDuration.value) parts.push(stepDuration.value)
+  if (failedSteps.value) parts.push(`失败 ${failedSteps.value}`)
+  return parts.join(' · ')
+})
+
+/**
+ * 复制完整执行记录：一条条点开再抄太折磨人。
+ * 记的是「哪一步 / 花了多久 / 成没成 / 入参 / 输出」，拿去复盘或贴给别人都是完整的。
+ */
+function copySteps() {
+  const lines = [`【KylinWork 执行记录】${stepSummary.value}`]
+  props.msg.tools.forEach((t, i) => {
+    const d = t.startedAt && t.endedAt ? formatDuration(t.endedAt - t.startedAt) : ''
+    lines.push(
+      '',
+      `${i + 1}. ${describeTool(t.name, t.input, t.purpose)}（${t.name}${d ? ` · ${d}` : ''}${t.isError ? ' · 失败' : ''}）`,
+    )
+    if (t.input) lines.push(`   入参：${t.input.replace(/\s+/g, ' ')}`)
+    if (t.diff?.length) lines.push(`   改动：\n${t.diff.map((l) => `   ${l.op} ${l.text}`).join('\n')}`)
+    if (t.result) lines.push(`   ${t.isError ? '报错' : '结果'}：${t.result.replace(/\s+/g, ' ')}`)
+  })
+  navigator.clipboard
+    .writeText(lines.join('\n'))
+    .then(() => toast.success('执行记录已复制'))
+    .catch(() => toast.error('复制失败'))
+}
 const aggOpen = ref<Set<string>>(new Set())
 function toggleAgg(key: string) {
   const next = new Set(aggOpen.value)
@@ -117,6 +151,15 @@ function isAggOpen(key: string) {
 /** 来源默认收起，底部只留个数——十几条链接铺在答复底下会盖过正文 */
 const sourcesOpen = ref(false)
 const sourceCount = computed(() => props.msg.sources?.length || 0)
+
+/** 知识库引用：和联网来源一样默认收起，只报个数 */
+const citationsOpen = ref(false)
+const citationCount = computed(() => props.msg.citations?.length || 0)
+
+/** 引用的类型图标：网页 / 笔记 / 文件 */
+function citationIcon(c: { kind?: string }) {
+  return c.kind === 'web' ? Link2 : c.kind === 'note' ? StickyNote : FileText
+}
 
 /** 「哪儿不对」的输入框：父组件把 fbNoteOpen 打开后这里自动聚焦 */
 const note = ref('')
@@ -261,42 +304,74 @@ function sizeOf(name: string) {
       <!-- 思考过程：默认折叠，不跟正式答复抢版面 -->
       <ThinkingBlock v-if="msg.thinking" :text="msg.thinking" :streaming="!msg.done" />
 
-      <!-- 工具调用：连续同类并成一行；整轮跑完后折成一句「工作了多久」 -->
-      <div v-if="msg.tools.length">
+      <!-- 工具调用：连续同类并成一行；整轮跑完后折成一句「执行过程 · N 步」 -->
+      <div v-if="msg.tools.length" class="min-w-0">
+        <!-- 折叠态：一句摘要，让人知道记录在、只是收着（下面一行就是展开区） -->
         <button
           v-if="foldSteps && !stepsOpen"
           type="button"
-          class="flex cursor-pointer items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          class="flex max-w-full cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-muted/30 px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
           @click="stepsOpen = true"
         >
-          <ChevronRight class="size-3.5 shrink-0" />
-          {{ stepLabel }}
+          <ListChecks class="size-3.5 shrink-0" />
+          <span class="shrink-0 font-medium">执行过程</span>
+          <span class="shrink-0 tabular-nums">{{ stepSummary }}</span>
+          <ChevronDown class="size-3 shrink-0" />
         </button>
-        <div v-else class="space-y-0.5 border-l border-border pl-2.5">
-          <template v-for="row in toolRows" :key="row.key">
-            <ToolCallLine v-if="row.items.length === 1" :tool="row.items[0]!" />
-            <div v-else>
-              <button
-                type="button"
-                class="flex w-full cursor-pointer items-center gap-1.5 rounded-md py-0.5 text-left text-[13px] text-muted-foreground transition-colors hover:text-foreground"
-                @click="toggleAgg(row.key)"
-              >
-                <component
-                  :is="metaOf(row.name).icon"
-                  class="size-3.5 shrink-0"
-                  :class="row.items.some((x) => x.isError) ? 'text-destructive' : KIND_TONE[metaOf(row.name).kind]"
-                />
-                <span class="min-w-0 truncate">
-                  {{ describeTool(row.name, row.items[0]?.input, row.items[0]?.purpose) }} × {{ row.items.length }}
-                </span>
-                <ChevronRight class="size-3 shrink-0 transition-transform" :class="isAggOpen(row.key) && 'rotate-90'" />
-              </button>
-              <div v-if="isAggOpen(row.key)" class="mt-0.5 space-y-0.5 border-l border-border pl-2.5">
-                <ToolCallLine v-for="t in row.items" :key="t.id" :tool="t" />
+
+        <template v-else>
+          <!-- 展开态表头：步数 / 耗时 / 失败数 + 复制整份记录。
+               只有一步时不摆表头，那一行工具自己就说清楚了 -->
+          <div v-if="msg.tools.length > 1" class="mb-1 flex items-center gap-2 text-xs text-muted-foreground">
+            <ListChecks class="size-3.5 shrink-0" />
+            <span class="shrink-0 font-medium">执行过程</span>
+            <span class="min-w-0 truncate tabular-nums">{{ stepSummary }}</span>
+            <span class="flex-1" />
+            <button
+              type="button"
+              class="shrink-0 cursor-pointer rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground"
+              title="复制完整执行记录"
+              @click="copySteps"
+            >
+              <Copy class="size-3" />
+            </button>
+            <button
+              v-if="foldSteps"
+              type="button"
+              class="shrink-0 cursor-pointer rounded p-0.5 transition-colors hover:bg-accent hover:text-foreground"
+              title="收起执行过程"
+              @click="stepsOpen = false"
+            >
+              <ChevronDown class="size-3 rotate-180" />
+            </button>
+          </div>
+
+          <div class="space-y-0.5 border-l border-border pl-2.5">
+            <template v-for="row in toolRows" :key="row.key">
+              <ToolCallLine v-if="row.items.length === 1" :tool="row.items[0]!" />
+              <div v-else>
+                <button
+                  type="button"
+                  class="flex w-full cursor-pointer items-center gap-1.5 rounded-md py-0.5 text-left text-[13px] text-muted-foreground transition-colors hover:text-foreground"
+                  @click="toggleAgg(row.key)"
+                >
+                  <component
+                    :is="metaOf(row.name).icon"
+                    class="size-3.5 shrink-0"
+                    :class="row.items.some((x) => x.isError) ? 'text-destructive' : KIND_TONE[metaOf(row.name).kind]"
+                  />
+                  <span class="min-w-0 truncate">
+                    {{ describeTool(row.name, row.items[0]?.input, row.items[0]?.purpose) }} × {{ row.items.length }}
+                  </span>
+                  <ChevronRight class="size-3 shrink-0 transition-transform" :class="isAggOpen(row.key) && 'rotate-90'" />
+                </button>
+                <div v-if="isAggOpen(row.key)" class="mt-0.5 space-y-0.5 border-l border-border pl-2.5">
+                  <ToolCallLine v-for="t in row.items" :key="t.id" :tool="t" />
+                </div>
               </div>
-            </div>
-          </template>
-        </div>
+            </template>
+          </div>
+        </template>
       </div>
 
       <!-- 正文：markdown 全量渲染（标题/列表/表格/代码/图表都有样式） -->
@@ -418,6 +493,21 @@ function sizeOf(name: string) {
         <p v-else class="mt-2 text-xs text-muted-foreground">已选：{{ msg.ask.answered }}</p>
       </div>
 
+      <!-- 知识来源：本轮从知识库命中的片段，默认收起 -->
+      <div v-if="citationsOpen && citationCount" class="flex flex-wrap gap-1.5">
+        <span
+          v-for="c in msg.citations"
+          :key="c.n"
+          class="flex max-w-[22rem] items-center gap-1 truncate rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[10px] text-muted-foreground"
+          :title="`${c.kb_name} · ${c.doc_name}\n${c.snippet}`"
+        >
+          <component :is="citationIcon(c)" class="size-3 shrink-0" />
+          <span class="font-mono text-primary">[{{ c.n }}]</span>
+          <span class="truncate">{{ c.doc_name }}</span>
+          <span class="shrink-0 text-muted-foreground/70">#{{ c.seq + 1 }}</span>
+        </span>
+      </div>
+
       <!-- 来源：默认只报个数，点开才铺链接 -->
       <div v-if="sourcesOpen && sourceCount" class="flex flex-wrap gap-1.5">
         <a
@@ -434,7 +524,7 @@ function sizeOf(name: string) {
 
       <!-- 汇总入口：产物 / 变更 / 来源，参考版底部那一行 -->
       <div
-        v-if="msg.done && ((artifactCount || 0) > 0 || (changedCount || 0) > 0 || sourceCount > 0)"
+        v-if="msg.done && ((artifactCount || 0) > 0 || (changedCount || 0) > 0 || sourceCount > 0 || citationCount > 0)"
         class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground"
       >
         <button
@@ -452,6 +542,14 @@ function sizeOf(name: string) {
           @click="emit('open-artifacts')"
         >
           查看所有变更 ({{ changedCount }})<ChevronRight class="size-3" />
+        </button>
+        <button
+          v-if="citationCount"
+          type="button"
+          class="flex items-center gap-0.5 transition-colors hover:text-foreground"
+          @click="citationsOpen = !citationsOpen"
+        >
+          知识来源 ({{ citationCount }})<ChevronRight class="size-3 transition-transform" :class="citationsOpen && 'rotate-90'" />
         </button>
         <button
           v-if="sourceCount"
@@ -555,16 +653,3 @@ function sizeOf(name: string) {
     </div>
   </div>
 </template>
-
-<style scoped>
-/* markdown 正文：主题色变量与全站同源（--foreground / --border 等已在 :root 定义），
-   这里只补两处与对话区版面相关的收尾——正文与相邻块（工具行、文件卡）之间的呼吸，
-   以及窄屏下的横向滚动兜底（宽表格不该把整页撑破）。 */
-.kw-md :deep(.stream-markdown) {
-  padding-block: 0.125rem;
-}
-.kw-md :deep(table) {
-  display: block;
-  overflow-x: auto;
-}
-</style>

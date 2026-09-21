@@ -125,6 +125,74 @@ function resolveChannelModel(ref) {
   return { base_url: ch.base_url, api_key: ch.api_key || "", model, channel: ch.name };
 }
 
+// ==================== 每个库各配一套（缺省回落全局「设置 → 知识库」） ====================
+//
+// 以前 embedding / rerank / 切块参数是全局一份，所有库共用。现在改成库上存一份，
+// 没有的字段才回落到全局——所以老库（bases.json 里没这些字段）行为完全不变。
+
+/** 库上可覆盖的数值/布尔参数；给了就用库上的，没给用全局的，再兜一层默认值 */
+const BASE_TUNING_FIELDS = {
+  chunk_size: { def: 800, min: 200, max: 4000, round: true },
+  chunk_overlap: { def: 120, min: 0, max: 2000, round: true },
+  top_k: { def: 6, min: 1, max: 50, round: true },
+  score_threshold: { def: 0, min: 0, max: 1, round: false },
+  inject_chars: { def: 6000, min: 1000, max: 40000, round: true },
+};
+
+/** 把一个参数值夹到合法区间；空值返回 undefined（表示「没配，走回落」） */
+function clampField(name, v) {
+  const spec = BASE_TUNING_FIELDS[name];
+  if (!spec) return undefined;
+  if (v === undefined || v === null || v === "") return undefined;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return undefined;
+  const clamped = Math.max(spec.min, Math.min(spec.max, n));
+  return spec.round ? Math.round(clamped) : clamped;
+}
+
+/** 抽出一份「库里显式配置了」的参数（未配置的字段不出现，回落到全局） */
+function baseOverrides(b) {
+  const out = {};
+  if (!b) return out;
+  for (const k of Object.keys(BASE_TUNING_FIELDS)) {
+    const v = clampField(k, b[k]);
+    if (v !== undefined) out[k] = v;
+  }
+  if (b.expand_neighbors !== undefined) out.expand_neighbors = !!b.expand_neighbors;
+  return out;
+}
+
+/** 这个库实际生效的切块 / 召回参数：库配置 > 全局设置 > 默认值 */
+function tuningFor(b) {
+  const g = tuning();
+  const o = baseOverrides(b);
+  const pick = (k) => (o[k] !== undefined ? o[k] : g[k]);
+  return {
+    chunk_size: pick("chunk_size"),
+    chunk_overlap: pick("chunk_overlap"),
+    top_k: pick("top_k"),
+    score_threshold: pick("score_threshold"),
+    inject_chars: pick("inject_chars"),
+    expand_neighbors: o.expand_neighbors !== undefined ? o.expand_neighbors : true,
+  };
+}
+
+/** 这个库用的向量渠道：库上选的 > 全局选的 > 注入的共用 embedder */
+function embedCfgFor(b) {
+  return resolveChannelModel((b && b.embedding) || "") || embedCfg();
+}
+/** 这个库用的重排渠道：库上选的 > 全局选的 */
+function rerankCfgFor(b) {
+  return resolveChannelModel((b && b.rerank) || "") || rerankCfg();
+}
+/** 这个库「按当前配置」实际在用的向量模型名（判向量失效、界面展示都用它） */
+function embeddingModelFor(b) {
+  const sel = resolveChannelModel((b && b.embedding) || "");
+  if (sel) return sel.model;
+  if (b && b.embedding) return ""; // 库里选了但渠道解析不出来 → 视为没有可用向量
+  return embeddingModel();
+}
+
 // ==================== 目录与库表 ====================
 
 function ensureRoot() {
@@ -158,13 +226,12 @@ function writeBases(bases) {
 }
 
 /**
- * 这条文件记录的向量还算不算数：向量是「当前用的这条模型」算的才算。
+ * 这条文件记录的向量还算不算数：向量是「这个库当前用的这条模型」算的才算。
  * 换了模型旧向量就不是同一个空间里的东西了——检索时会跳过它，界面据此提示重建索引。
  */
-function vecStale(rec) {
+function vecStale(rec, curModel) {
   const recModel = String(rec.embed_model || rec.embedding || "");
-  const cur = embeddingModel();
-  return !!(recModel && cur && recModel !== cur);
+  return !!(recModel && curModel && recModel !== curModel);
 }
 
 function listBases() {
@@ -172,24 +239,38 @@ function listBases() {
     let file_count = 0;
     let chunk_count = 0;
     let vectorized = 0;
+    let embedded_chunks = 0;
     let stale_files = 0;
+    const model = embeddingModelFor(b);
     try {
-      const idx = readIndex(b.id);
-      const files = Object.values(idx.files || {});
-      file_count = files.length;
-      for (const f of files) {
+      const docs = Object.values(readIndex(b.id).docs || {});
+      file_count = docs.length;
+      for (const f of docs) {
         const chunks = f.chunks || [];
         chunk_count += chunks.length;
-        const hasVec = chunks.some((c) => c.vec && c.vec.length);
-        if (hasVec) {
+        const vecCount = chunks.filter((c) => c.vec && c.vec.length).length;
+        embedded_chunks += vecCount;
+        if (vecCount) {
           vectorized += 1;
-          if (vecStale(f)) stale_files += 1;
+          if (vecStale(f, model)) stale_files += 1;
         }
       }
     } catch (e) {
       console.warn(`[知识库] 统计 ${b.id} 的索引失败：`, e.message);
     }
-    return { ...b, file_count, chunk_count, indexed_files: vectorized, stale_files };
+    return {
+      ...b,
+      file_count,
+      chunk_count,
+      embedded_chunks,
+      indexed_files: vectorized,
+      stale_files,
+      // 界面直接照着显示，不用再自己拼「渠道::模型」
+      embedding_model: model,
+      embedding_source: resolveChannelModel(b.embedding || "") ? "selected" : embeddingConfigured() ? "shared" : "none",
+      rerank_configured: !!rerankCfgFor(b),
+      tuning: tuningFor(b),
+    };
   });
 }
 
@@ -197,7 +278,7 @@ function getBase(id) {
   return readBases().find((b) => b.id === id) || null;
 }
 
-function createBase({ name, description } = {}) {
+function createBase({ name, description, embedding, rerank, ...rest } = {}) {
   const n = String(name || "").replace(/\s+/g, " ").trim();
   if (!n) throw new Error("知识库名称不能为空");
   if (n.length > 40) throw new Error("知识库名称最多 40 个字");
@@ -210,11 +291,40 @@ function createBase({ name, description } = {}) {
     description: String(description || "").slice(0, 200),
     created_at: now,
     updated_at: now,
+    // 每库配置：给空就回落全局；只有显式填了的才记进库
+    embedding: String(embedding || "").trim(),
+    rerank: String(rerank || "").trim(),
   };
+  applyBaseConfig(base, rest);
   bases.unshift(base);
   writeBases(bases);
-  fs.mkdirSync(filesDir(base.id), { recursive: true });
+  ensureBaseDirs(base.id);
   return base;
+}
+
+/**
+ * 把请求里的配置字段落到库记录上。数值字段按区间夹取、非法值忽略（保持原值），
+ * 这样前端传 {} 或半截表单都不会把已配好的参数清成脏数据。
+ */
+function applyBaseConfig(base, patch = {}) {
+  for (const k of Object.keys(BASE_TUNING_FIELDS)) {
+    if (!(k in patch)) continue;
+    if (patch[k] === null || patch[k] === "") { delete base[k]; continue; } // 显式清空 = 回落全局
+    const v = clampField(k, patch[k]);
+    if (v !== undefined) base[k] = v;
+  }
+  if ("expand_neighbors" in patch) {
+    if (patch.expand_neighbors === null) delete base.expand_neighbors;
+    else base.expand_neighbors = !!patch.expand_neighbors;
+  }
+  if ("embedding" in patch) base.embedding = String(patch.embedding || "").trim();
+  if ("rerank" in patch) base.rerank = String(patch.rerank || "").trim();
+  return base;
+}
+
+/** 换 embedding 模型的判定：只有真变了才算（避免每次保存设置都清空向量重算） */
+function embeddingRefOf(b) {
+  return String((b && b.embedding) || "").trim();
 }
 
 function updateBase(id, patch = {}) {
@@ -229,9 +339,25 @@ function updateBase(id, patch = {}) {
     b.name = n;
   }
   if (patch.description !== undefined) b.description = String(patch.description || "").slice(0, 200);
+  // 向量渠道变了 → 旧向量不再同源，清掉并标记（界面提示「已重置，需重建索引」）
+  const beforeRef = embeddingRefOf(b);
+  applyBaseConfig(b, patch);
+  const embeddingsReset = "embedding" in patch && embeddingRefOf(b) !== beforeRef;
+  if (embeddingsReset) clearVectors(id);
   b.updated_at = new Date().toISOString();
   writeBases(bases);
-  return b;
+  return { base: b, embeddings_reset: embeddingsReset };
+}
+
+/** 清掉整库的向量（换 embedding 模型后调用）。文本分块保留，只需重建向量 */
+function clearVectors(id) {
+  const idx = readIndex(id);
+  for (const d of Object.values(idx.docs || {})) {
+    for (const c of d.chunks || []) delete c.vec;
+    d.embed_model = "";
+    d.embedding = "";
+  }
+  writeIndex(id, idx);
 }
 
 function deleteBase(id) {
@@ -243,15 +369,51 @@ function deleteBase(id) {
   return { ok: true };
 }
 
-// ==================== 文件与索引 ====================
+// ==================== 文档与索引 ====================
+//
+// index.json 里一个库的全部文档都在 docs 下，键是文档 id：
+//   文件类（kind=file）id 就是文件名（和磁盘 files/ 里的文件同名，也和 jobs.json 对得上），
+//   笔记 / 网页（kind=note|web）没有磁盘文件，正文直接内联在 content 里。
 
+/** 建库时把库目录和 files/ 都建出来 */
+function ensureBaseDirs(id) {
+  fs.mkdirSync(filesDir(id), { recursive: true });
+}
+
+/** 读索引，并把老结构（只有 files、没有 docs 的版本）就地升级 */
 function readIndex(id) {
-  const d = store.readJson(indexPath(id), { files: {} });
-  return d && typeof d === "object" && d.files ? d : { files: {} };
+  const d = store.readJson(indexPath(id), { docs: {} });
+  if (d && typeof d === "object" && !d.docs && d.files) {
+    const docs = {};
+    for (const [name, rec] of Object.entries(d.files || {})) {
+      docs[name] = { id: name, name, kind: "file", ...rec };
+    }
+    return { docs };
+  }
+  return d && typeof d === "object" && d.docs ? d : { docs: {} };
 }
 function writeIndex(id, idx) {
   fs.mkdirSync(baseDir(id), { recursive: true });
   store.writeJsonAtomic(indexPath(id), idx, { pretty: false });
+}
+
+/** 取一个文档记录（找不到返回 null） */
+function getDoc(id, docId) {
+  const d = readIndex(id).docs || {};
+  return d[docId] || null;
+}
+/** 补一个文档记录 */
+function putDoc(id, doc) {
+  const idx = readIndex(id);
+  idx.docs[doc.id] = doc;
+  writeIndex(id, idx);
+  return doc;
+}
+/** 删一个文档记录 */
+function dropDoc(id, docId) {
+  const idx = readIndex(id);
+  delete idx.docs[docId];
+  writeIndex(id, idx);
 }
 
 function safeName(name) {
@@ -260,45 +422,83 @@ function safeName(name) {
   return base;
 }
 
-function listFiles(id) {
-  let entries = [];
+/**
+ * 列出库里的全部文档（文件 / 笔记 / 网页）。
+ * 状态取后台队列：queued / running / ready / error；没有任务记录时按「有没有分块」推断。
+ */
+function listDocs(id) {
+  let out = [];
   try {
-    // 索引整库只读一次。以前放在 map 里，每个文件都重新读一遍 + 解析一遍 JSON
-    const files = readIndex(id).files;
-    entries = fs
-      .readdirSync(filesDir(id), { withFileTypes: true })
-      .filter((e) => e.isFile() && !e.name.startsWith("."))
-      .map((e) => {
-        const st = fs.statSync(path.join(filesDir(id), e.name));
-        const idx = files[e.name];
-        const chunks = idx ? idx.chunks || [] : [];
+    const idx = readIndex(id);
+    const docs = Object.values(idx.docs || {});
+    const jobs = readJobs();
+    const model = embeddingModelFor(getBase(id));
+    out = docs
+      .map((d) => {
+        const chunks = d.chunks || [];
+        const embedded = chunks.filter((c) => c.vec && c.vec.length).length;
+        const job = jobs.find((j) => j.kb_id === id && (j.doc_id || j.name) === d.id);
         return {
-          name: e.name,
-          size: st.size,
-          mtime: st.mtime.toISOString(),
+          id: d.id,
+          name: d.name,
+          kind: d.kind || "file",
+          url: d.url || "",
+          size: d.size || 0,
+          mtime: d.mtime || d.updated_at || "",
           chunks: chunks.length,
+          embedded,
           indexed: chunks.length > 0,
-          vectorized: chunks.some((c) => c.vec && c.vec.length),
-          stale: !!(idx && vecStale(idx)),
-          error: idx && idx.error ? idx.error : "",
-          status: (statusOf(id, e.name) || (chunks.length ? "ready" : "idle")),
+          vectorized: embedded > 0,
+          stale: vecStale(d, model),
+          error: d.error || "",
+          status: job ? job.state : chunks.length ? "ready" : "idle",
+          attempts: job ? job.attempts || 0 : 0,
         };
       })
-      .sort((a, b) => b.mtime.localeCompare(a.mtime));
+      .sort((a, b) => String(b.mtime).localeCompare(String(a.mtime)));
   } catch (e) {
     // 目录读不出来时界面会显示「这个库是空的」——安静吞掉会让人以为文件丢了，留一条日志
-    console.warn(`[知识库] 列出 ${id} 的文件失败：`, e.message);
+    console.warn(`[知识库] 列出 ${id} 的文档失败：`, e.message);
   }
-  return entries;
+  return out;
 }
 
-function deleteFile(id, name) {
-  const n = safeName(name);
-  tryIgnore(`删除文件 ${n}`, () => fs.rmSync(path.join(filesDir(id), n), { force: true }));
-  const idx = readIndex(id);
-  delete idx.files[n];
-  writeIndex(id, idx);
+/** 兼容老调用方：文件视角就是全部文档（笔记 / 网页也在里面，带 kind 区分） */
+function listFiles(id) {
+  return listDocs(id);
+}
+
+/** 一个文档的分块明细（查看分块用）。文本不截断，展示交给前端 */
+function listChunks(id, docId) {
+  const d = getDoc(id, docId);
+  if (!d) throw new Error("文档不存在");
+  return (d.chunks || []).map((c) => ({
+    seq: c.seq,
+    text: c.text,
+    heading: c.heading || "",
+    char_count: (c.text || "").length,
+    embedded: !!(c.vec && c.vec.length),
+  }));
+}
+
+/** 删除一个文档：文件类删磁盘文件，记录删索引，任务从队列里摘掉 */
+function deleteDoc(id, docId) {
+  const d = getDoc(id, docId);
+  if (!d) throw new Error("文档不存在");
+  if ((d.kind || "file") === "file") {
+    tryIgnore(`删除文件 ${d.name}`, () => fs.rmSync(path.join(filesDir(id), d.name), { force: true }));
+  }
+  dropDoc(id, docId);
+  tryIgnore(`清理任务 ${docId}`, () => {
+    const jobs = readJobs().filter((j) => !(j.kb_id === id && (j.doc_id || j.name) === docId));
+    writeJobs(jobs);
+  });
   return { ok: true };
+}
+
+/** 兼容老接口：按文件名删（文件类文档 id 就是文件名） */
+function deleteFile(id, name) {
+  return deleteDoc(id, safeName(name));
 }
 
 // ---------- 正文抽取：纯文本直接读，xlsx 借 exceljs，docx/pptx 解 zip，pdf 走 pdfjs ----------
@@ -622,23 +822,92 @@ async function callEmbeddings(cfg, texts) {
 }
 
 /**
- * 向量化一批文本。返回 {vecs, model}；拿不到就 vecs=null（调用方退回关键词），绝不抛。
- * 选了渠道就用选的这条（失败也只降级，不去偷偷换别的模型——换了向量就不在一个空间里了）；
- * 没选才回落到注入的 embedder，那条是和长期记忆共用的，自带换道降级。
+ * 送向量前的长度约束。
+ * <p>
+ * bge 这类中文模型的上限是 512 token，而中文大致「一字一 token」——默认切块 800 字一次发过去
+ * 会被服务端直接判 400（硅基流动 code 20015），表现为「整份文件向量化失败」，切块参数越标准越必现。
+ * 所以送向量前按上限截断：保留头部（这一段在讲什么）和尾部（结论/参数常在这），中间省略。
+ * 注意只影响送去算向量的那份文本，正文、关键词索引、界面展示都还是完整的。
  */
-async function embedFor(texts) {
+const EMBED_MAX_CHARS = 480;
+/** 一批的总字符上限：条数不多但每条都长时，总量仍可能顶到服务端的请求上限 */
+const EMBED_BATCH_CHARS = 6000;
+const EMBED_BATCH_MAX = 32;
+
+function clampForEmbed(text) {
+  const s = String(text || "");
+  if (s.length <= EMBED_MAX_CHARS) return s;
+  const head = Math.ceil(EMBED_MAX_CHARS * 0.75);
+  const tail = EMBED_MAX_CHARS - head;
+  return `${s.slice(0, head)}\n…\n${s.slice(-tail)}`;
+}
+
+/**
+ * 一批失败就对半切开重试，切到单条还失败就放弃这一条。
+ * 一条超限/坏掉不该让整份文件都没有向量——能算的算出来，算不了的那段退回关键词。
+ */
+async function embedSliceResilient(cfg, texts) {
+  try {
+    return await callEmbeddings(cfg, texts);
+  } catch (e) {
+    if (texts.length <= 1) {
+      console.warn(`[知识库] 有 1 段文本向量化失败（${String(e.message).slice(0, 120)}），该段只有关键词，无向量`);
+      return [null];
+    }
+    const mid = Math.floor(texts.length / 2);
+    const a = await embedSliceResilient(cfg, texts.slice(0, mid));
+    const b = await embedSliceResilient(cfg, texts.slice(mid));
+    return a.concat(b);
+  }
+}
+
+/** 按总字符与条数上限切批，逐批算；个别段失败不影响其它段（返回数组里对应位置为 null） */
+async function callEmbeddingsBatched(cfg, texts) {
+  const out = new Array(texts.length).fill(null);
+  let i = 0;
+  while (i < texts.length) {
+    let j = i;
+    let chars = 0;
+    while (j < texts.length && j - i < EMBED_BATCH_MAX && (j === i || chars + texts[j].length <= EMBED_BATCH_CHARS)) {
+      chars += texts[j].length;
+      j += 1;
+    }
+    const slice = texts.slice(i, j);
+    const got = await embedSliceResilient(cfg, slice);
+    for (let k = 0; k < slice.length; k++) out[i + k] = got[k] || null;
+    i = j;
+  }
+  return out;
+}
+
+/**
+ * 向量化一批文本。返回 {vecs, model}；拿不到就 vecs=null（调用方退回关键词），绝不抛。
+ * cfg 是调用方按「这个库」解析出来的渠道（每库配置）；不传才回落到全局选的、再回落共用的 embedder。
+ * 选了渠道就用选的这条（失败也只降级，不去偷偷换别的模型——换了向量就不在一个空间里了）。
+ * 个别段失败时，对应位置返回 null（那段没有向量，其它段照常）——只要有一条成功就不算整批降级。
+ */
+async function embedFor(texts, cfg) {
   if (!texts.length) return { vecs: null, model: "" };
-  const sel = embedCfg();
+  const prepared = texts.map(clampForEmbed);
+  const sel = cfg || embedCfg();
   if (sel) {
+    let got;
     try {
-      return { vecs: (await callEmbeddings(sel, texts)).map(roundVec), model: sel.model };
+      got = await callEmbeddingsBatched(sel, prepared);
     } catch (e) {
       console.warn(`[知识库] 向量渠道「${sel.channel} · ${sel.model}」调用失败（${String(e.message).slice(0, 160)}），本次按关键词检索兜底`);
       return { vecs: null, model: "" };
     }
+    if (!got.some((v) => v && v.length)) {
+      console.warn(`[知识库] 向量渠道「${sel.channel} · ${sel.model}」没返回可用向量，本次按关键词检索兜底`);
+      return { vecs: null, model: "" };
+    }
+    const missing = got.filter((v) => !v || !v.length).length;
+    if (missing) console.warn(`[知识库] 有 ${missing}/${texts.length} 段没算出向量（多半是单段超长），这些段只有关键词`);
+    return { vecs: got.map((v) => (v && v.length ? roundVec(v) : null)), model: sel.model };
   }
   if (!embedder) return { vecs: null, model: "" };
-  const vecs = await embedTexts(texts);
+  const vecs = await embedTexts(prepared);
   // embedder 连挂三次会自己换道，此时 model 已变——必须以换完之后的为准，否则记的模型和向量对不上
   return { vecs, model: vecs ? embeddingModel() : "" };
 }
@@ -656,8 +925,8 @@ function joinUrl(base, suffix) {
 }
 
 /** 对候选段重排（Jina / Cohere 风格 /rerank）。返回 [{index, score}]；未配或失败返回 null */
-async function rerankDocs(query, docs, topN) {
-  const r = rerankCfg();
+async function rerankDocs(query, docs, topN, cfg) {
+  const r = cfg || rerankCfg();
   if (!r.base_url || !r.model || docs.length < 2) return null;
   const resp = await fetch(joinUrl(r.base_url, "/rerank"), {
     method: "POST",
@@ -734,64 +1003,15 @@ function jaccard(a, b) {
   return inter / (a.size + b.size - inter);
 }
 
-/**
- * 检索主流程：两路召回 → RRF 融合 → 相邻块合并 → 去重 → 重排 → 截断。
- * 对外分数沿用「向量余弦优先，否则关键词分」，所以 score_threshold 的口径没变。
- * @returns {Promise<{hits:object[], mode:string, model:string, notes:string[]}>}
- */
-async function searchDetailed(query, ids) {
-  const q = String(query || "").trim();
-  const baseIds = (Array.isArray(ids) ? ids : []).filter(Boolean);
-  const t = tuning();
-  const notes = [];
-  if (!q || !baseIds.length) return { hits: [], mode: "none", model: "", notes };
-
-  // 查询向量必须和索引里的向量同源：用「设置 → 知识库」选的那条模型去算
-  const { vecs, model: curModel } = await embedFor([q]);
-  const qvec = vecs && vecs[0] && vecs[0].length ? vecs[0] : null;
-  if (!qvec) notes.push(embeddingConfigured() ? "向量召回本次不可用，已按关键词检索" : "未配向量模型，按关键词检索");
-
-  const terms = queryTerms(q);
-  const cands = [];
-  let stale = 0;
-  for (const id of baseIds) {
-    const base = getBase(id);
-    if (!base) continue;
-    const idx = readIndex(id);
-    for (const [name, rec] of Object.entries(idx.files || {})) {
-      // 向量只在与查询同模型时才算：不同模型的向量不在一个空间里，硬算余弦得到的是貌似相关的噪声。
-      // 旧索引没有 embed_model，退回读 embedding 字段（它记的就是当年算向量的那条模型）。
-      const recModel = String(rec.embed_model || rec.embedding || "");
-      const vecUsable = !!(qvec && recModel && recModel === curModel);
-      for (const ch of rec.chunks || []) {
-        const hasVec = !!(ch.vec && ch.vec.length);
-        const vscore = vecUsable && hasVec ? cosine(qvec, ch.vec) : 0;
-        const kscore = keywordScore(terms, ch.text);
-        if (qvec && hasVec && !vecUsable) stale += 1;
-        if (vscore <= 0 && kscore <= 0) continue;
-        cands.push({
-          kb_id: id,
-          kb: base.name,
-          file: name,
-          text: ch.text,
-          seq: Number.isFinite(ch.seq) ? ch.seq : 0,
-          heading: String(ch.heading || ""),
-          vscore,
-          kscore,
-        });
-      }
-    }
-  }
-  if (stale) notes.push(`有 ${stale} 段向量是别的模型算的，本次已跳过；在知识库页「重建索引」可恢复语义召回`);
-  if (!cands.length) return { hits: [], mode: "none", model: curModel, notes };
-
-  // RRF 融合。取每路前 N 名而不是全量：排名几百名开外的 1/(60+rank) 贡献可以忽略
+/** RRF 融合 + 展示打分（在同一个候选集内做排名） */
+function fuseRank(cands, t) {
+  // 取每路前 N 名而不是全量：排名几百名开外的 1/(60+rank) 贡献可以忽略
   const byVec = cands.filter((c) => c.vscore > 0).sort((a, b) => b.vscore - a.vscore).slice(0, CANDIDATES_PER_PATH);
   const byKw = cands.filter((c) => c.kscore > 0).sort((a, b) => b.kscore - a.kscore).slice(0, CANDIDATES_PER_PATH);
   const fused = new Map();
   byVec.forEach((c, i) => fused.set(c, (fused.get(c) || 0) + 1 / (RRF_K + i + 1)));
   byKw.forEach((c, i) => fused.set(c, (fused.get(c) || 0) + 1 / (RRF_K + i + 1)));
-  const ranked = [...fused.entries()]
+  return [...fused.entries()]
     .map(([c, rrf]) => ({
       ...c,
       rrf,
@@ -800,13 +1020,17 @@ async function searchDetailed(query, ids) {
     }))
     .filter((c) => c.score >= t.score_threshold)
     .sort((a, b) => b.rrf - a.rrf);
+}
 
-  // 相邻块合并：命中常常落在同一段被切开的两块上，拼回一段模型才读得连贯；
-  // 只在「相邻的块这次也被召回」时才拼，避免把整篇都灌进去
+/**
+ * 相邻块合并：命中常常落在同一段被切开的两块上，拼回一段模型才读得连贯；
+ * 只在「相邻的块这次也被召回」时才拼，避免把整篇都灌进去。
+ */
+function mergeNeighbors(ranked, t) {
   const MERGE_BUDGET = Math.max(400, t.chunk_size * 2);
   const byFile = new Map();
   for (const c of ranked) {
-    const k = c.kb_id + "\u0000" + c.file;
+    const k = c.kb_id + "\u0000" + c.doc_id;
     if (!byFile.has(k)) byFile.set(k, new Map());
     byFile.get(k).set(c.seq, c);
   }
@@ -814,7 +1038,7 @@ async function searchDetailed(query, ids) {
   const merged = [];
   for (const hit of ranked) {
     if (used.has(hit)) continue;
-    const neigh = byFile.get(hit.kb_id + "\u0000" + hit.file);
+    const neigh = byFile.get(hit.kb_id + "\u0000" + hit.doc_id);
     const group = [hit];
     used.add(hit);
     let lo = hit.seq;
@@ -851,8 +1075,11 @@ async function searchDetailed(query, ids) {
       matched: group.some((g) => g.matched === "both") ? "both" : hit.matched,
     });
   }
+  return merged;
+}
 
-  // 去重：同一段被切成多块命中、或文件里本来就有重复段落时，只留一条
+/** 去重：同一段被切成多块命中、或文件里本来就有重复段落时，只留一条 */
+function dedupeHits(merged) {
   const kept = [];
   const seenTokens = [];
   for (const h of merged) {
@@ -861,15 +1088,19 @@ async function searchDetailed(query, ids) {
     kept.push(h);
     seenTokens.push(tk);
   }
+  return kept;
+}
 
+/** 重排 + 截断 topK（这个库配了重排渠道才走真实重排，否则原序截断） */
+async function applyRerank(q, kept, t, cfg, notes) {
   const topK = Math.max(1, Math.min(50, t.top_k));
   let final = kept;
   const poolSize = Math.min(final.length, Math.max(topK * 4, 20));
-  if (rerankConfigured() && poolSize > 1) {
+  if (cfg && cfg.base_url && cfg.model && poolSize > 1) {
     const head = final.slice(0, poolSize);
     try {
       // 送重排时把标题一起带上：标题是这一块「讲什么」的最短描述，缺了它重排容易判错
-      const rr = await rerankDocs(q, head.map((c) => (c.heading ? `${c.heading}\n${c.text}` : c.text)), topK);
+      const rr = await rerankDocs(q, head.map((c) => (c.heading ? `${c.heading}\n${c.text}` : c.text)), topK, cfg);
       if (rr) {
         const reordered = rr
           .map((it) => ({ ...head[it.index], score: it.score, reranked: true }))
@@ -883,8 +1114,90 @@ async function searchDetailed(query, ids) {
       notes.push("重排接口调用失败，已用融合排序");
     }
   }
-  const mode = [qvec ? "向量" : "", terms.length ? "关键词" : ""].filter(Boolean).join(" + ") || "无";
-  return { hits: final.slice(0, topK), mode, model: curModel || "", notes };
+  return final.slice(0, topK);
+}
+
+/**
+ * 检索主流程：**逐库**做「两路召回 → RRF 融合 → 相邻块合并 → 去重 → 重排」，再合并总排名。
+ * 之所以一个库一个库地跑：每个库可以有自己的向量模型、重排渠道和 topK，
+ * 用一套全局参数硬套所有库会让「这个库配了重排、那个库没配」这种组合失效。
+ * @returns {Promise<{hits:object[], mode:string, model:string, notes:string[]}>}
+ */
+async function searchDetailed(query, ids) {
+  const q = String(query || "").trim();
+  const baseIds = (Array.isArray(ids) ? ids : []).filter(Boolean);
+  const notes = [];
+  if (!q || !baseIds.length) return { hits: [], mode: "none", model: "", notes };
+
+  const terms = queryTerms(q);
+  const all = [];
+  const models = new Set();
+  let stale = 0;
+  let vectorUsed = false;
+  let vectorTried = false;
+  let topK = 1;
+
+  for (const id of baseIds) {
+    const base = getBase(id);
+    if (!base) continue;
+    const t = tuningFor(base);
+    topK = Math.max(topK, Math.max(1, Math.min(50, t.top_k)));
+    const cfg = embedCfgFor(base);
+    const canVec = !!(cfg || embedder);
+
+    // 查询向量必须和索引里的向量同源，而每个库可能用不同的模型——所以逐库算
+    let qvec = null;
+    let model = "";
+    if (canVec) {
+      vectorTried = true;
+      const r = await embedFor([q], cfg);
+      qvec = r.vecs && r.vecs[0] && r.vecs[0].length ? r.vecs[0] : null;
+      model = r.model || "";
+      if (!qvec) notes.push(`「${base.name}」向量召回本次不可用，已按关键词检索`);
+    }
+    if (model) models.add(model);
+
+    const idx = readIndex(id);
+    const cands = [];
+    for (const doc of Object.values(idx.docs || {})) {
+      // 向量只在与查询同模型时才算：不同模型的向量不在一个空间里，硬算余弦得到的是貌似相关的噪声。
+      // 旧索引没有 embed_model，退回读 embedding 字段（它记的就是当年算向量的那条模型）。
+      const recModel = String(doc.embed_model || doc.embedding || "");
+      const vecUsable = !!(qvec && recModel && recModel === model);
+      for (const ch of doc.chunks || []) {
+        const hasVec = !!(ch.vec && ch.vec.length);
+        const vscore = vecUsable && hasVec ? cosine(qvec, ch.vec) : 0;
+        const kscore = keywordScore(terms, ch.text);
+        if (qvec && hasVec && !vecUsable) stale += 1;
+        if (vscore <= 0 && kscore <= 0) continue;
+        cands.push({
+          kb_id: id,
+          kb: base.name,
+          doc_id: doc.id,
+          kind: doc.kind || "file",
+          file: doc.name,
+          text: ch.text,
+          seq: Number.isFinite(ch.seq) ? ch.seq : 0,
+          heading: String(ch.heading || ""),
+          vscore,
+          kscore,
+        });
+      }
+    }
+    if (qvec) vectorUsed = true;
+
+    const ranked = fuseRank(cands, t);
+    const merged = mergeNeighbors(ranked, t);
+    const kept = dedupeHits(merged);
+    const final = await applyRerank(q, kept, t, rerankCfgFor(base), notes);
+    all.push(...final);
+  }
+
+  if (stale) notes.push(`有 ${stale} 段向量是别的模型算的，本次已跳过；在知识库页「重建索引」可恢复语义召回`);
+  if (!vectorTried) notes.push("未配向量模型，按关键词检索");
+  all.sort((a, b) => b.score - a.score);
+  const mode = [vectorUsed ? "向量" : "", terms.length ? "关键词" : ""].filter(Boolean).join(" + ") || "无";
+  return { hits: all.slice(0, topK), mode, model: [...models].join("、"), notes };
 }
 
 /**
@@ -896,16 +1209,25 @@ async function search(query, ids) {
   return (await searchDetailed(query, ids)).hits;
 }
 
-/** 拼给模型的上下文块，带 [n] 编号与可引用的来源。没有命中返回空串 */
+/**
+ * 拼给模型的上下文块，带 [n] 编号与可引用的来源。没有命中返回空串。
+ * 同时回一份 citations（引用元数据），对话末尾的「来源」就靠它渲染，不用再让前端去猜编号。
+ */
 async function buildContext(query, ids) {
-  const { hits } = await searchDetailed(query, ids);
-  if (!hits.length) return { text: "", hits: [] };
-  const limit = Math.max(1000, Math.min(40000, tuning().inject_chars));
+  const baseIds = (Array.isArray(ids) ? ids : []).filter(Boolean);
+  const { hits } = await searchDetailed(query, baseIds);
+  if (!hits.length) return { text: "", hits: [], citations: [] };
+  // 注入上限按这几个库里最宽的那档，避免选了个大库却被全局小值卡住
+  const limit = baseIds.reduce((m, id) => {
+    const b = getBase(id);
+    return b ? Math.max(m, tuningFor(b).inject_chars) : m;
+  }, tuning().inject_chars);
+  const cap = Math.max(1000, Math.min(40000, limit));
   const picked = [];
   let used = 0;
   for (const h of hits) {
     const block = `[${picked.length + 1}] ${h.kb} · ${h.file}\n${h.text}`;
-    if (used + block.length > limit && picked.length) break;
+    if (used + block.length > cap && picked.length) break;
     picked.push(h);
     used += block.length;
   }
@@ -916,9 +1238,24 @@ async function buildContext(query, ids) {
   const text =
     `\n\n## 知识库检索结果（来自用户所选知识库，按相关度排序）\n` +
     `回答时优先依据以下资料；若资料不足以回答，明确说明并再向用户确认，不要编造。\n` +
-    `引用资料时在句末标出它的编号（如 [1]），只引用下面有的编号。\n\n` +
+    `引用资料时在句末标出它的编号（如 [1]），只引用下面有的编号。\n` +
+    `下面是按用户这句话召回的前几段，不是全部——要找别的配置项、参数或章节细节时，用 knowledge_search 工具继续检索这几个库。\n\n` +
     parts.join("\n\n---\n\n");
-  return { text, hits, used };
+  const citations = picked.map((h, i) => ({
+    n: i + 1,
+    kb_id: h.kb_id,
+    kb_name: h.kb,
+    doc_id: h.doc_id,
+    doc_name: h.file,
+    kind: h.kind || "file",
+    seq: h.seq,
+    heading: h.heading || "",
+    score: h.score,
+    matched: h.matched || "",
+    reranked: !!h.reranked,
+    snippet: String(h.text || "").replace(/\s+/g, " ").slice(0, 160),
+  }));
+  return { text, hits, citations, used };
 }
 
 // ==================== 建索引 ====================
@@ -930,46 +1267,66 @@ function embedContext(name, c) {
 }
 
 /**
- * 给单个文件建索引：抽正文 → 分块 → 有向量渠道就批量向量化。
- * 任何环节失败都退化为「只有文本分块」，只记 error 不抛，避免一次坏文件拖垮整库。
+ * 给一个文档建索引：取正文 → 分块 → 有向量渠道就批量向量化。
+ * 文件类从磁盘抽正文（docx/pptx/xlsx/pdf/文本），笔记 / 网页直接用内联的 content。
+ * 任何环节失败都退化为「只有文本分块」，只记 error 不抛，避免一份坏资料拖垮整库。
  * @param {object} [opts] onProgress 供后台队列回报进度
  */
-async function indexFile(id, name, opts = {}) {
-  const n = safeName(name);
-  const full = path.join(filesDir(id), n);
-  const idx = readIndex(id);
-  if (!fs.existsSync(full)) {
-    delete idx.files[n];
-    writeIndex(id, idx);
-    return { name: n, chunks: 0, indexed: false, error: "文件不存在" };
-  }
-  const st = fs.statSync(full);
-  if (st.size > MAX_FILE_BYTES) {
-    idx.files[n] = { size: st.size, mtime: st.mtime.toISOString(), chunks: [], error: "文件过大，未建索引" };
-    writeIndex(id, idx);
-    return { name: n, chunks: 0, indexed: false, error: idx.files[n].error };
+async function ingestDoc(id, docId, opts = {}) {
+  const d = getDoc(id, docId);
+  if (!d) return { id: docId, name: docId, chunks: 0, indexed: false, error: "文档不存在" };
+  const base = getBase(id);
+  const t = tuningFor(base);
+
+  let text = "";
+  let note = "";
+  let size = d.size || 0;
+  let mtime = d.mtime || "";
+  if ((d.kind || "file") === "file") {
+    const full = path.join(filesDir(id), d.name);
+    if (!fs.existsSync(full)) {
+      dropDoc(id, docId);
+      return { id: docId, name: d.name, chunks: 0, indexed: false, error: "文件不存在" };
+    }
+    const st = fs.statSync(full);
+    size = st.size;
+    mtime = st.mtime.toISOString();
+    if (st.size > MAX_FILE_BYTES) {
+      Object.assign(d, { size, mtime, chunks: [], error: "文件过大，未建索引" });
+      putDoc(id, d);
+      return { id: docId, name: d.name, chunks: 0, indexed: false, error: d.error };
+    }
+    const buf = await fs.promises.readFile(full);
+    const r = await extractText(d.name, buf);
+    text = r.text;
+    note = r.note || "";
+  } else {
+    text = String(d.content || "");
   }
 
-  const buf = await fs.promises.readFile(full);
-  const { text, note } = await extractText(n, buf);
-  const t = tuning();
   const chunks = chunkWithMeta(text, t.chunk_size, t.chunk_overlap);
   if (!chunks.length) {
-    idx.files[n] = { size: st.size, mtime: st.mtime.toISOString(), chunks: [], error: note || "没有可索引的文本内容" };
-    writeIndex(id, idx);
-    return { name: n, chunks: 0, indexed: false, error: idx.files[n].error };
+    Object.assign(d, { size, mtime, chunks: [], error: note || "没有可索引的文本内容" });
+    putDoc(id, d);
+    return { id: docId, name: d.name, chunks: 0, indexed: false, error: d.error };
   }
 
   // 向量化：embedFor 内部已降级（拿不到就 vecs=null），这里只在失败时记一笔
+  const cfg = embedCfgFor(base);
   let vecs = null;
   let embedModel = "";
   let embedError = "";
-  if (embeddingConfigured()) {
+  if (cfg || embedder) {
     if (typeof opts.onProgress === "function") opts.onProgress({ phase: "embedding", chunks: chunks.length });
-    const r = await embedFor(chunks.map((c) => embedContext(n, c)));
+    const r = await embedFor(chunks.map((c) => embedContext(d.name, c)), cfg);
     vecs = r.vecs;
     embedModel = r.model;
-    if (!vecs) embedError = "向量化没成功（已按关键词检索兜底）";
+    if (!vecs) {
+      embedError = "向量化没成功（已按关键词检索兜底）";
+    } else {
+      const miss = vecs.filter((v) => !v || !v.length).length;
+      if (miss) embedError = `有 ${miss} 段没算出向量（多半是单段超长），这几段按关键词检索`;
+    }
   }
   const records = chunks.map((c, i) => {
     const rec = { text: c.text, heading: c.heading, seq: c.seq, char_start: c.char_start, char_end: c.char_end };
@@ -978,28 +1335,96 @@ async function indexFile(id, name, opts = {}) {
   });
   // embed_model 是「这批向量是谁算的」——换了向量模型后它会跟当前模型对不上，
   // 检索据此跳过这些向量（不同模型的向量没法比），而不是拿噪声当相似度。
-  idx.files[n] = {
-    size: st.size,
-    mtime: st.mtime.toISOString(),
+  Object.assign(d, {
+    size,
+    mtime,
     chunks: records,
     embed_model: vecs ? embedModel : "",
     embedding: vecs ? embedModel : "",
     error: embedError,
-  };
-  writeIndex(id, idx);
-  return { name: n, chunks: records.length, indexed: true, error: embedError };
+  });
+  putDoc(id, d);
+  return { id: docId, name: d.name, chunks: records.length, indexed: true, error: embedError };
 }
 
-/** 重建整个库的索引（换了 embedding 模型后要重跑一遍） */
+/** 兼容老名字（历史上只处理文件类文档） */
+async function indexFile(id, name, opts = {}) {
+  return ingestDoc(id, safeName(name), opts);
+}
+
+/** 重建整个库的索引（换了 embedding 模型、或改了切块参数后要重跑一遍） */
 async function reindexBase(id, opts = {}) {
   if (!getBase(id)) throw new Error("知识库不存在");
-  const files = listFiles(id);
+  const docs = listDocs(id);
   const results = [];
-  for (let i = 0; i < files.length; i++) {
-    if (typeof opts.onProgress === "function") opts.onProgress({ phase: "reindex", done: i, total: files.length, current: files[i].name });
-    results.push(await indexFile(id, files[i].name));
+  for (let i = 0; i < docs.length; i++) {
+    if (typeof opts.onProgress === "function") opts.onProgress({ phase: "reindex", done: i, total: docs.length, current: docs[i].name });
+    results.push(await ingestDoc(id, docs[i].id));
   }
   return results;
+}
+
+// ==================== 笔记 / 网页数据源 ====================
+
+/** 没有磁盘文件的文档（笔记 / 网页）用的 id */
+function syntheticDocId(kind) {
+  return kind + "_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
+}
+
+/** HTML → 纯文本：去脚本/样式/标签。和 extractText 处理 .html 用的是同一口径 */
+function htmlToText(html) {
+  return String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** 抓一个网页，返回标题与正文（正文入库，标题当文档名） */
+async function fetchWebText(url) {
+  const u = String(url || "").trim();
+  if (!/^https?:\/\//i.test(u)) throw new Error("网址要以 http:// 或 https:// 开头");
+  const resp = await fetch(u, {
+    headers: { "User-Agent": "Mozilla/5.0 (compatible; KylinWork/1.0)", Accept: "text/html,application/xhtml+xml" },
+    signal: AbortSignal.timeout(20000),
+    redirect: "follow",
+  });
+  if (!resp.ok) throw new Error(`抓取失败：HTTP ${resp.status}`);
+  const html = await resp.text();
+  const rawTitle = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || "";
+  const title = String(rawTitle).trim().slice(0, 120) || u;
+  return { title, text: htmlToText(html) };
+}
+
+/** 加一条笔记：正文内联，不需要磁盘文件 */
+function addNote(id, { title, content } = {}) {
+  if (!getBase(id)) throw new Error("知识库不存在");
+  const text = String(content || "");
+  if (!text.trim()) throw new Error("笔记内容不能为空");
+  const name = String(title || "").trim().slice(0, 80) || "笔记 " + new Date().toLocaleString("zh-CN");
+  const now = new Date().toISOString();
+  const doc = { id: syntheticDocId("note"), name, kind: "note", content: text, size: Buffer.byteLength(text), mtime: now, created_at: now, chunks: [], error: "" };
+  putDoc(id, doc);
+  enqueueIndex(id, doc.id);
+  return doc;
+}
+
+/** 加一个网页：服务端抓正文后入库 */
+async function addWeb(id, { url } = {}) {
+  if (!getBase(id)) throw new Error("知识库不存在");
+  const { title, text } = await fetchWebText(url);
+  if (!text) throw new Error("这个网页没抓到正文（可能是纯 JS 渲染的页面）");
+  const now = new Date().toISOString();
+  const doc = { id: syntheticDocId("web"), name: title, kind: "web", url: String(url), content: text, size: Buffer.byteLength(text), mtime: now, created_at: now, chunks: [], error: "" };
+  putDoc(id, doc);
+  enqueueIndex(id, doc.id);
+  return doc;
 }
 
 // ==================== 后台入库队列 ====================
@@ -1032,20 +1457,22 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-/** 某个文件当前的入库状态：queued / running / ready / error（没记录返回空串） */
-function statusOf(kbId, name) {
-  const j = readJobs().find((x) => x.kb_id === kbId && x.name === name);
+/** 某个文档当前的入库状态：queued / running / ready / error（没记录返回空串） */
+function statusOf(kbId, docId) {
+  const j = readJobs().find((x) => x.kb_id === kbId && (x.doc_id || x.name) === docId);
   return j ? j.state : "";
 }
 
-/** 同一个文件的任务只留一条：重新上传 / 重试都是把旧记录顶掉重排到队尾 */
-function enqueueIndex(kbId, name) {
-  const n = safeName(name);
-  const jobs = readJobs().filter((j) => !(j.kb_id === kbId && j.name === n));
+/** 同一个文档的任务只留一条：重新上传 / 重试都是把旧记录顶掉重排到队尾 */
+function enqueueIndex(kbId, docId) {
+  const d = getDoc(kbId, docId);
+  const label = d ? d.name : String(docId);
+  const jobs = readJobs().filter((j) => !(j.kb_id === kbId && (j.doc_id || j.name) === docId));
   jobs.push({
     id: "job_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6),
     kb_id: kbId,
-    name: n,
+    doc_id: docId,
+    name: label,
     state: "queued",
     attempts: 0,
     error: "",
@@ -1057,22 +1484,28 @@ function enqueueIndex(kbId, name) {
   });
   writeJobs(jobs);
   kick();
-  return { name: n, state: "queued" };
+  return { doc_id: docId, name: label, state: "queued" };
 }
 
-/** 整库重排：每个文件各排一条（换了向量模型后重跑） */
+/** 整库重排：每个文档各排一条（换了向量模型 / 改了切块参数后重跑） */
 function enqueueReindex(kbId) {
   if (!getBase(kbId)) throw new Error("知识库不存在");
-  const names = listFiles(kbId).map((f) => f.name);
-  for (const n of names) enqueueIndex(kbId, n);
-  return { queued: names.length };
+  const docs = listDocs(kbId);
+  for (const d of docs) enqueueIndex(kbId, d.id);
+  return { queued: docs.length };
+}
+
+/** 只给「有分块但没向量」的文档补向量（换了模型把向量清掉时用，不重切块） */
+function enqueueEmbedMissing(kbId) {
+  if (!getBase(kbId)) throw new Error("知识库不存在");
+  const docs = listDocs(kbId).filter((d) => d.chunks > 0 && d.embedded < d.chunks);
+  for (const d of docs) enqueueIndex(kbId, d.id);
+  return { queued: docs.length };
 }
 
 /** 失败重试用：把一条任务重新排进队列 */
-function retryJob(kbId, name) {
-  const n = safeName(name);
-  if (!readJobs().some((j) => j.kb_id === kbId && j.name === n)) return enqueueIndex(kbId, n);
-  return enqueueIndex(kbId, n);
+function retryJob(kbId, docId) {
+  return enqueueIndex(kbId, docId);
 }
 
 function queueStats() {
@@ -1114,11 +1547,13 @@ async function pump() {
       job.error = "";
       writeJobs(jobs);
       try {
-        const r = await indexFile(job.kb_id, job.name);
+        const r = await ingestDoc(job.kb_id, job.doc_id || job.name);
         const after = readJobs();
         const cur = after.find((j) => j.id === job.id);
         if (cur) {
-          cur.state = r.error ? "error" : "ready";
+          // 分块建出来了就算成功——向量没算上只是少了语义召回，关键词还能用，
+          // 标成「入库失败」会让人以为这份资料完全没进去（error 文案仍留着说明原因）
+          cur.state = r.chunks > 0 ? "ready" : "error";
           cur.error = r.error || "";
           cur.chunks = r.chunks || 0;
           cur.finished_at = nowIso();
@@ -1162,10 +1597,13 @@ function resumeQueue() {
       adopted += 1;
     }
   }
-  // 顺手清掉已经不存在（库或文件被删）的任务，免得每次启动都在捞僵尸
+  // 顺手清掉已经不存在（库或文档被删）的任务，免得每次启动都在捞僵尸
   const alive = jobs.filter((j) => {
     if (!getBase(j.kb_id)) return false;
     if (j.state === "ready") return true;
+    const docId = j.doc_id || j.name;
+    if (getDoc(j.kb_id, docId)) return true;
+    // 老任务只有 name，且文档记录可能还没建出来——退回看磁盘文件在不在
     return fs.existsSync(path.join(filesDir(j.kb_id), j.name));
   });
   writeJobs(alive);
@@ -1238,20 +1676,41 @@ module.exports = {
   createBase,
   updateBase,
   deleteBase,
+  listDocs,
   listFiles,
+  listChunks,
+  getDoc,
   async saveFile(id, name, buffer) {
     const n = safeName(name);
     if (!buffer || !buffer.length) throw new Error("文件是空的");
     fs.mkdirSync(filesDir(id), { recursive: true });
     // 异步写：知识库单文件可到 50mb，同步写会把整个事件循环按住
     await fs.promises.writeFile(path.join(filesDir(id), n), buffer);
-    return { name: n, size: buffer.length };
+    // 文件刚落盘、还没入库时也要在列表里看得见，所以立刻建一条文档记录（chunks 为空 = 待处理）
+    const st = fs.statSync(path.join(filesDir(id), n));
+    const prev = getDoc(id, n);
+    putDoc(id, {
+      ...(prev || {}),
+      id: n,
+      name: n,
+      kind: "file",
+      size: st.size,
+      mtime: st.mtime.toISOString(),
+      chunks: prev && prev.chunks ? prev.chunks : [],
+      error: prev ? prev.error || "" : "",
+    });
+    return { name: n, id: n, size: buffer.length };
   },
+  deleteDoc,
   deleteFile,
+  addNote,
+  addWeb,
+  ingestDoc,
   indexFile,
   reindexBase,
   enqueueIndex,
   enqueueReindex,
+  enqueueEmbedMissing,
   retryJob,
   statusOf,
   queueStats,
@@ -1264,4 +1723,5 @@ module.exports = {
   chunkText,
   chunkWithMeta,
   extractText,
+  tuningFor,
 };

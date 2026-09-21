@@ -77,6 +77,10 @@ export interface ScheduleRun {
   ended_at?: string | null
   ms?: number
   result?: string
+  /** 这次执行开出来的会话 id（定时任务也会进左侧任务列表，靠它关联） */
+  session_id?: string
+  /** 会话所属工作空间名：侧栏按工作空间分组，这一格不能缺 */
+  session_project?: string
   [key: string]: unknown
 }
 
@@ -258,13 +262,17 @@ export function setScheduleCatchUp(id: string, catchUp: boolean) {
   return httpEngine.post(`/schedules/${id}/catchup`, { catch_up: catchUp }).then((r) => r.data)
 }
 
-/** 立刻跑一次（不等时间到） */
+/** 立刻跑一次（不等时间到）。回包里带 session_id —— 这次执行开出来的那条会话 */
 export function runSchedule(id: string) {
-  return httpEngine.post(`/schedules/${id}/run`).then((r) => r.data)
+  return httpEngine
+    .post<{ ok: boolean; reply?: string; session_id?: string }>(`/schedules/${id}/run`)
+    .then((r) => r.data)
 }
 
-export function listScheduleRuns() {
-  return httpEngine.get<ScheduleRun[]>('/schedules/runs').then((r) => r.data)
+export function listScheduleRuns(limit?: number) {
+  return httpEngine
+    .get<ScheduleRun[]>('/schedules/runs', limit ? { params: { limit } } : undefined)
+    .then((r) => r.data)
 }
 
 // ==================== 安全审批（本地权限闸门） ====================
@@ -503,22 +511,80 @@ export interface KnowledgeBase {
   updated_at?: string
   file_count?: number
   chunk_count?: number
+  /** 已向量化的分块数（向量进度条用） */
+  embedded_chunks?: number
   indexed_files?: number
   /** 向量是换模型之前算的文件数（>0 说明该重建索引了） */
   stale_files?: number
+  /** 这个库实际在用的向量模型（留空 = 关键词检索） */
+  embedding_model?: string
+  embedding_source?: 'selected' | 'shared' | 'none'
+  rerank_configured?: boolean
+  /** 每库配置：这些字段是库上显式配的；缺省回落到全局「设置 → 知识库」 */
+  embedding?: string
+  rerank?: string
+  chunk_size?: number
+  chunk_overlap?: number
+  top_k?: number
+  score_threshold?: number
+  inject_chars?: number
+  expand_neighbors?: boolean
+  /** 实际生效的参数（库配置回落全局之后的结果） */
+  tuning?: KnowledgeTuning
 }
 
-/** 知识库里的一个文件（status 是后台入库队列的状态；stale 说明向量是别的模型算的，要重建） */
-export interface KnowledgeFile {
+/** 一个库实际生效的切块 / 召回参数 */
+export interface KnowledgeTuning {
+  chunk_size: number
+  chunk_overlap: number
+  top_k: number
+  score_threshold: number
+  inject_chars: number
+  expand_neighbors: boolean
+}
+
+/** 建库 / 改库时能带的每库配置 */
+export interface KnowledgeConfigPatch {
+  embedding?: string
+  rerank?: string
+  chunk_size?: number | null
+  chunk_overlap?: number | null
+  top_k?: number | null
+  score_threshold?: number | null
+  inject_chars?: number | null
+  expand_neighbors?: boolean | null
+}
+
+/** 知识库里的一个文档（文件 / 笔记 / 网页） */
+export interface KnowledgeDoc {
+  id: string
   name: string
+  /** file=上传的文件、note=笔记、web=网页 */
+  kind: 'file' | 'note' | 'web'
+  url?: string
   size: number
   mtime: string
   chunks: number
+  /** 已向量化的分块数 */
+  embedded: number
   indexed: boolean
   vectorized?: boolean
   stale?: boolean
   error?: string
-  status?: '' | 'queued' | 'running' | 'ready' | 'error'
+  status: '' | 'queued' | 'running' | 'ready' | 'error' | 'idle'
+  attempts?: number
+}
+
+/** 兼容旧命名 */
+export type KnowledgeFile = KnowledgeDoc
+
+/** 一个文档的分块明细 */
+export interface KnowledgeChunk {
+  seq: number
+  text: string
+  heading: string
+  char_count: number
+  embedded: boolean
 }
 
 export interface KnowledgeQueue {
@@ -530,7 +596,7 @@ export interface KnowledgeQueue {
 
 export interface KnowledgeList {
   bases: KnowledgeBase[]
-  /** model 是实际在用的那条；source=selected 表示它是「设置 → 知识库」里选的，shared 表示和长期记忆共用 */
+  /** model 是全局默认实际在用的那条；source=selected 表示它是「设置 → 知识库」里选的，shared 表示和长期记忆共用 */
   embedding: { configured: boolean; model?: string | null; source?: 'selected' | 'shared' | 'none'; channel?: string }
   rerank: { configured: boolean }
   selected?: { embedding: string; rerank: string }
@@ -547,26 +613,40 @@ export function knowledgeQueue() {
   return httpEngine.get<KnowledgeQueue>('/knowledge/queue').then((r) => r.data)
 }
 
-export function createKnowledgeBase(data: { name: string; description?: string }) {
+export function createKnowledgeBase(data: { name: string; description?: string } & KnowledgeConfigPatch) {
   return httpEngine.post<{ ok: boolean; base: KnowledgeBase }>('/knowledge/bases', data).then((r) => r.data)
 }
 
-export function updateKnowledgeBase(id: string, patch: { name?: string; description?: string }) {
-  return httpEngine.post<{ ok: boolean; base: KnowledgeBase }>(`/knowledge/bases/${encodeURIComponent(id)}`, patch).then((r) => r.data)
+export function updateKnowledgeBase(id: string, patch: { name?: string; description?: string } & KnowledgeConfigPatch) {
+  return httpEngine
+    .post<{ ok: boolean; base: KnowledgeBase; embeddings_reset?: boolean }>(`/knowledge/bases/${encodeURIComponent(id)}`, patch)
+    .then((r) => r.data)
 }
 
 export function deleteKnowledgeBase(id: string) {
   return httpEngine.delete(`/knowledge/bases/${encodeURIComponent(id)}`).then((r) => r.data)
 }
 
+/** 库里的文档（文件 / 笔记 / 网页） */
+export function listKnowledgeDocs(id: string) {
+  return httpEngine.get<{ docs: KnowledgeDoc[]; total: number }>(`/knowledge/bases/${encodeURIComponent(id)}/docs`).then((r) => r.data)
+}
+/** 兼容旧命名 */
 export function listKnowledgeFiles(id: string) {
-  return httpEngine.get<{ files: KnowledgeFile[] }>(`/knowledge/bases/${encodeURIComponent(id)}/files`).then((r) => r.data)
+  return listKnowledgeDocs(id)
 }
 
-/** 上传资料：落盘后入库任务排进后台队列，立刻返回；进度看文件列表的 status */
+/** 一个文档的分块明细（查看分块） */
+export function listKnowledgeChunks(id: string, docId: string) {
+  return httpEngine
+    .get<{ chunks: KnowledgeChunk[] }>(`/knowledge/bases/${encodeURIComponent(id)}/chunks`, { params: { doc: docId } })
+    .then((r) => r.data)
+}
+
+/** 上传资料：落盘后入库任务排进后台队列，立刻返回；进度看文档列表的 status */
 export function uploadKnowledgeFile(id: string, file: File) {
   return httpEngine
-    .post<{ ok: boolean; file: string; size: number; queued: boolean; status: string }>(
+    .post<{ ok: boolean; file: string; id: string; size: number; queued: boolean; status: string }>(
       `/knowledge/bases/${encodeURIComponent(id)}/upload`,
       file,
       { headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) } },
@@ -574,28 +654,57 @@ export function uploadKnowledgeFile(id: string, file: File) {
     .then((r) => r.data)
 }
 
+/** 加一条笔记（正文内联，不落磁盘文件） */
+export function addKnowledgeNote(id: string, data: { title?: string; content: string }) {
+  return httpEngine.post<{ ok: boolean; doc: KnowledgeDoc }>(`/knowledge/bases/${encodeURIComponent(id)}/note`, data).then((r) => r.data)
+}
+
+/** 加一个网页：服务端抓正文后入库 */
+export function addKnowledgeWeb(id: string, url: string) {
+  return httpEngine.post<{ ok: boolean; doc: KnowledgeDoc }>(`/knowledge/bases/${encodeURIComponent(id)}/web`, { url }).then((r) => r.data)
+}
+
+export function deleteKnowledgeDoc(id: string, docId: string) {
+  return httpEngine.delete(`/knowledge/bases/${encodeURIComponent(id)}/docs/${encodeURIComponent(docId)}`).then((r) => r.data)
+}
+/** 兼容旧命名 */
 export function deleteKnowledgeFile(id: string, name: string) {
   return httpEngine.delete(`/knowledge/bases/${encodeURIComponent(id)}/files/${encodeURIComponent(name)}`).then((r) => r.data)
 }
 
-/** 重新入库：不传 name 则整库排进队列（换了 embedding 模型后用） */
-export function reindexKnowledge(id: string, name?: string) {
+/** 重新入库：不传 doc 则整库排进队列（换了 embedding 模型 / 改了切块参数后用） */
+export function reindexKnowledge(id: string, doc?: string) {
   return httpEngine.post<{ ok: boolean; queued: number; status: KnowledgeQueue }>(
     `/knowledge/bases/${encodeURIComponent(id)}/reindex`,
-    name ? { name } : {},
+    doc ? { doc } : {},
+  ).then((r) => r.data)
+}
+
+/** 补齐向量：只对「有分块但没向量」的文档重排（换模型清空向量后不必重切块） */
+export function embedMissingKnowledge(id: string) {
+  return httpEngine.post<{ ok: boolean; queued: number; status: KnowledgeQueue }>(
+    `/knowledge/bases/${encodeURIComponent(id)}/embed-missing`,
+    {},
   ).then((r) => r.data)
 }
 
 /** 入库失败三次后停下的任务，手动重试 */
-export function retryKnowledgeFile(id: string, name: string) {
+export function retryKnowledgeDoc(id: string, docId: string) {
   return httpEngine.post<{ ok: boolean; status: KnowledgeQueue }>(
     `/knowledge/bases/${encodeURIComponent(id)}/retry`,
-    { name },
+    { doc: docId },
   ).then((r) => r.data)
+}
+/** 兼容旧命名 */
+export function retryKnowledgeFile(id: string, name: string) {
+  return retryKnowledgeDoc(id, name)
 }
 
 export interface KnowledgeHit {
+  kb_id?: string
   kb: string
+  doc_id?: string
+  kind?: 'file' | 'note' | 'web'
   file: string
   heading?: string
   seq?: number
@@ -606,6 +715,22 @@ export interface KnowledgeHit {
   reranked?: boolean
   score: number
   text: string
+}
+
+/** 对话里的知识库引用（答复底下的「来源」） */
+export interface KnowledgeCitation {
+  n: number
+  kb_id: string
+  kb_name: string
+  doc_id: string
+  doc_name: string
+  kind?: 'file' | 'note' | 'web'
+  seq: number
+  heading?: string
+  score: number
+  matched?: string
+  reranked?: boolean
+  snippet: string
 }
 
 /** 检索预览：验证「这样问能不能召回」。mode/model/notes 让用户看清这次走的哪条路 */

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { CalendarClock, Pencil, Play, Plus, RefreshCw, Trash2, X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -22,6 +23,7 @@ import {
   type ScheduleRepeat,
   type ScheduleRun,
 } from '@/api/client'
+import { syncScheduleSessions } from '@/composables/useSessions'
 
 /**
  * 定时任务（自动化）。
@@ -30,6 +32,9 @@ import {
  * 每周几几点 / 每月几号几点 / 只跑一次；每个任务还能选在哪个工作空间里跑（不选就跟随当前）。
  * 想直接写 cron 的人，重复方式里选「自定义 Cron」。
  * AI 也能通过 create_schedule 工具建同样的任务（它也在工作空间里跑）。
+ * <p>
+ * 每次执行都会开一条会话（进左侧「任务」列表）——「立即跑」之后不用守着这一页，
+ * 去对话页就能看它跑到哪了、产出了什么。
  */
 
 type RepeatType = ScheduleRepeat['type'] | 'cron'
@@ -40,6 +45,7 @@ const projects = ref<Project[]>([])
 const loading = ref(true)
 const saving = ref(false)
 const showForm = ref(false)
+const router = useRouter()
 
 const form = reactive({
   id: '' as string,
@@ -191,9 +197,30 @@ async function handleCatchUp(s: Schedule) {
   catch (e) { toast.error('设置失败：' + (e as Error).message) }
 }
 
+/** 跳进某次执行开出来的会话：在对话页里看它的实时进度和产出 */
+function openRunSession(id: string) {
+  if (!id) return
+  void router.push({ path: '/', query: { session: id } })
+}
+
 async function handleRun(s: Schedule) {
-  try { await runSchedule(String(s.id)); toast.success('已触发，跑完可以在工作空间里看结果'); await load() }
-  catch (e) { toast.error('触发失败：' + (e as Error).message) }
+  try {
+    const r = await runSchedule(String(s.id))
+    const sid = String(r?.session_id || '')
+    // 立刻把运行记录合并进会话索引：不点这一下，左侧要等下一轮轮询才看得见它
+    void syncScheduleSessions()
+    void loadRuns()
+    toast.success('已开始执行，左侧任务列表能看到它的进度', {
+      action: sid ? { label: '查看', onClick: () => openRunSession(sid) } : undefined,
+    })
+  } catch (e) {
+    // 引擎在「启动就失败」时会连会话 id 一起带回来：能进那就让用户直接去看现场
+    const err = e as { response?: { data?: { error?: string; session_id?: string } }; message?: string }
+    const sid = String(err.response?.data?.session_id || '')
+    toast.error('触发失败：' + (err.response?.data?.error || err.message), {
+      action: sid ? { label: '查看', onClick: () => openRunSession(sid) } : undefined,
+    })
+  }
 }
 
 async function handleDelete(s: Schedule) {
@@ -376,7 +403,7 @@ const canSave = computed(() => !!form.task.trim() && !saving.value)
             </div>
 
             <p class="mt-2 text-xs text-muted-foreground">
-              {{ form.type === 'once' ? '跑完这一次后任务会自动停用。' : form.type === 'cron' ? 'cron 五字段：分 时 日 月 周。例如 0 9 * * 1 表示每周一 9:00。' : '到点后 AI 会用全新会话执行任务内容。' }}
+              {{ form.type === 'once' ? '跑完这一次后任务会自动停用。' : form.type === 'cron' ? 'cron 五字段：分 时 日 月 周。例如 0 9 * * 1 表示每周一 9:00。' : '每次执行都会开一条会话，出现在左侧任务列表里，点进去能看执行过程与产出。' }}
             </p>
           </div>
 
@@ -452,15 +479,23 @@ const canSave = computed(() => !!form.task.trim() && !saving.value)
     <Card v-if="runs.length">
       <CardHeader>
         <CardTitle class="text-base">最近运行记录</CardTitle>
-        <CardDescription>最近一次在前，最多保留 300 条。</CardDescription>
+        <CardDescription>最近一次在前，最多保留 300 条。点一条可以进它的会话看执行过程。</CardDescription>
       </CardHeader>
       <CardContent>
         <ul class="divide-y divide-border rounded-lg border border-border">
-          <li v-for="r in runs.slice(0, 20)" :key="String(r.id)" class="flex items-center gap-3 px-4 py-2.5 text-sm">
-            <Badge :variant="runStatus(r).variant" class="shrink-0">{{ runStatus(r).label }}</Badge>
-            <span class="w-32 shrink-0 truncate text-muted-foreground">{{ r.name || '—' }}</span>
-            <span class="flex-1 truncate text-muted-foreground">{{ r.result || (r.trigger ? `触发：${r.trigger}` : '') }}</span>
-            <span class="shrink-0 text-xs text-muted-foreground">{{ fmtTime(r.started_at) }}</span>
+          <li v-for="r in runs.slice(0, 20)" :key="String(r.id)">
+            <button
+              class="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors disabled:cursor-default"
+              :class="r.session_id ? 'hover:bg-accent/60' : ''"
+              :disabled="!r.session_id"
+              :title="r.session_id ? '查看这次执行的会话' : '这次执行没有留存会话'"
+              @click="openRunSession(String(r.session_id || ''))"
+            >
+              <Badge :variant="runStatus(r).variant" class="shrink-0">{{ runStatus(r).label }}</Badge>
+              <span class="w-32 shrink-0 truncate text-muted-foreground">{{ r.name || '—' }}</span>
+              <span class="flex-1 truncate text-muted-foreground">{{ r.result || (r.trigger ? `触发：${r.trigger}` : '') }}</span>
+              <span class="shrink-0 text-xs text-muted-foreground">{{ fmtTime(r.started_at) }}</span>
+            </button>
           </li>
         </ul>
       </CardContent>

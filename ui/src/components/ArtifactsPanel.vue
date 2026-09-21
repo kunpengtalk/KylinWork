@@ -20,15 +20,14 @@ import {
   FileCode2,
   FolderOpen,
   Globe,
+  Link2,
   Maximize2,
   Minimize2,
   MoreHorizontal,
   PanelRight,
-  Play,
   RefreshCw,
   RotateCw,
   Sparkles,
-  Square,
   X,
 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
@@ -65,13 +64,13 @@ const emit = defineEmits<{ (e: 'refresh'): void; (e: 'close'): void; (e: 'maximi
 
 // ==================== 拖宽（T3 的 PreviewPanelShell 可拖拽） ====================
 
-const width = ref(380)
+const width = ref(440)
 let dragFrom: { x: number; w: number } | null = null
 function startResize(e: MouseEvent) {
   dragFrom = { x: e.clientX, w: width.value }
   const move = (ev: MouseEvent) => {
     if (!dragFrom) return
-    width.value = Math.min(720, Math.max(260, dragFrom.w - (ev.clientX - dragFrom.x)))
+    width.value = Math.min(820, Math.max(280, dragFrom.w - (ev.clientX - dragFrom.x)))
   }
   const up = () => {
     dragFrom = null
@@ -82,7 +81,7 @@ function startResize(e: MouseEvent) {
   window.addEventListener('mouseup', up)
 }
 const asideStyle = computed(() =>
-  props.maximized ? undefined : { width: `${width.value}px`, minWidth: '260px', maxWidth: '720px' },
+  props.maximized ? undefined : { width: `${width.value}px`, minWidth: '280px', maxWidth: '820px' },
 )
 
 // ==================== tab 体系 ====================
@@ -174,6 +173,13 @@ const mediaKind = computed<'audio' | 'video' | 'image' | ''>(() => {
 /** 渲染/源码切换只对文本类文件有意义 */
 const codeCapable = computed(() => /\.(html?|svg|md|txt|json|log|yml|yaml|xml|csv|tsv|js|mjs|ts|css|py|sh|jsx|tsx|vue)$/i.test(selected.value))
 
+/**
+ * 浏览器式的地址栏只给「真网页」。
+ * 它本来是从网页预览那儿搬来的，但一路挂到了 .md/.txt/.json 上——结果面板顶部有一半的高度
+ * 在展示 `/engine-api/files/view/任务_xxx%2F档案.md` 这种接口路径，对读文档的人是纯噪音。
+ */
+const isWebPage = computed(() => /\.(html?|svg)$/i.test(selected.value))
+
 const lanOpen = ref(false)
 const starting = ref(false)
 const iframeKey = ref(0)
@@ -193,21 +199,28 @@ const frame = ref<HTMLIFrameElement | null>(null)
 /** iframe 当前加载的地址：点文件时是 view URL，地址栏回车后可以变 */
 const navSrc = ref('')
 const urlInput = ref('')
-const menuOpen = ref(false)
+/** 文件操作（下载/新窗口/本机打开…）的下拉开关 */
+const fileMenuOpen = ref(false)
+
+/** 地址栏给人看：接口前缀和百分号编码都抹掉，只留工作区里的相对路径 */
+function displayAddr(src: string): string {
+  const prefix = '/engine-api/files/view/'
+  if (!src.startsWith(prefix)) return src
+  try {
+    return decodeURIComponent(src.slice(prefix.length))
+  } catch {
+    return src
+  }
+}
 
 watch(selected, (name) => {
   navSrc.value = name ? fileViewUrl(name) : ''
-  // 地址栏给人看：解码过的中文路径；真正加载用的是 navSrc（编码过的）
-  try {
-    urlInput.value = decodeURI(navSrc.value)
-  } catch {
-    urlInput.value = navSrc.value
-  }
+  urlInput.value = name || ''
 })
 
 function goto(src: string) {
   navSrc.value = src
-  urlInput.value = src
+  urlInput.value = displayAddr(src)
   iframeKey.value++
 }
 /** 地址栏回车：纯文件名当工作区文件，完整 URL 直接访问 */
@@ -216,21 +229,23 @@ function navigate() {
   if (!u) return
   if (!/^https?:\/\//i.test(u) && !u.startsWith('/')) u = fileViewUrl(u)
   goto(u)
-  menuOpen.value = false
+}
+
+/** 复制这个文件的可分享地址（预览服务开着就是局域网地址，否则是本地地址） */
+async function copyFileLink() {
+  const base = preview.value.url || window.location.origin
+  try {
+    await navigator.clipboard.writeText(base.replace(/\/+$/, '') + fileViewUrl(selected.value))
+    toast.success('链接已复制')
+  } catch {
+    toast.error('复制失败')
+  }
 }
 function frameBack() {
   try { frame.value?.contentWindow?.history.back() } catch { /* 跨源页面不给碰 */ }
 }
 function frameForward() {
   try { frame.value?.contentWindow?.history.forward() } catch { /* 同上 */ }
-}
-function openNewWindow() {
-  if (selected.value) window.open(fileViewUrl(selected.value), '_blank', 'noopener')
-  menuOpen.value = false
-}
-function downloadFile() {
-  if (selected.value) window.open(fileDownloadUrl(selected.value), '_blank', 'noopener')
-  menuOpen.value = false
 }
 
 // ==================== 渲染 / 源码 ====================
@@ -239,32 +254,149 @@ const viewMode = ref<'render' | 'code'>('render')
 const codeText = ref('')
 const codeLoading = ref(false)
 // ==================== Markdown：渲染成文档排版（源码看原文） ====================
+//
+// 这里原来挂的是 `prose prose-sm dark:prose-invert`，但项目从来没装过
+// @tailwindcss/typography —— 这几个类名一个样式都没生效，而 Tailwind 的 preflight
+// 又把标题字号、段落边距、表格框线全抹平了，于是 .md 预览就是一坨没有层级的裸文本
+// （标题和正文一样大、表格连框线都没有）。现在换成自带的 .kw-doc 文档排版，见文件末尾的 <style>。
+
+/**
+ * `- [ ]` / `- [x]` 勾选清单。markdown-it 默认不认这个写法，
+ * 而 PROGRESS.md 这类进度文件通篇都是它——不渲染就全变成带方括号的普通列表项。
+ */
+function taskListPlugin(md: MarkdownIt) {
+  md.core.ruler.after('inline', 'kw_task_list', (state) => {
+    const toks = state.tokens
+    for (let i = 0; i < toks.length; i++) {
+      if (toks[i]!.type !== 'list_item_open') continue
+      // 结构固定是 list_item_open → paragraph_open → inline
+      const inline = toks[i + 2]
+      if (toks[i + 1]?.type !== 'paragraph_open' || inline?.type !== 'inline') continue
+      const first = inline.children?.[0]
+      if (!first || first.type !== 'text') continue
+      const m = /^\[([ xX])\]\s+/.exec(first.content)
+      if (!m) continue
+      first.content = first.content.slice(m[0].length)
+      const box = new state.Token('html_inline', '', 0)
+      box.content = `<span class="kw-task${m[1]!.toLowerCase() === 'x' ? ' kw-task-done' : ''}"></span>`
+      inline.children = [box, ...(inline.children || [])]
+      toks[i]!.attrJoin('class', 'kw-task-item')
+    }
+    return true
+  })
+}
 
 const mdRenderer = new MarkdownIt({ html: false, linkify: true, breaks: true })
+  .use(taskListPlugin)
+  .use(headingAnchorPlugin)
+
+/** 标题的 GitHub 风格 slug：中文原样留着，标点去掉，空格并成 - */
+function slugify(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]/gu, '')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+}
+
+/**
+ * 给标题挂 id。生成的报告经常自带「目录」——里面的 `[第三章](#3-交付物)` 要是没有落点，
+ * 点了就是纹丝不动，读者会以为面板坏了。同名标题（两章里各有一个「1. 现状」）追加序号，锚点不能撞。
+ */
+function headingAnchorPlugin(md: MarkdownIt) {
+  const seen = new Map<string, number>()
+  md.core.ruler.push('kw_heading_anchor', (state) => {
+    seen.clear()
+    const toks = state.tokens
+    for (let i = 0; i < toks.length; i++) {
+      if (toks[i]!.type !== 'heading_open') continue
+      const text = (toks[i + 1]?.children || []).map((c) => c.content).join('')
+      let id = slugify(text)
+      if (!id) continue
+      const n = (seen.get(id) || 0) + 1
+      seen.set(id, n)
+      if (n > 1) id = `${id}-${n}`
+      toks[i]!.attrSet('id', id)
+    }
+    return true
+  })
+}
+
 const isMarkdown = computed(() => /\.(md|markdown)$/i.test(selected.value))
 const mdHtml = ref('')
+const mdLoading = ref(false)
+/** 渲染出来的文档容器：`#小节` 跳转要在这里面找落点 */
+const docBody = ref<HTMLElement | null>(null)
 
-watch([active, viewMode], async () => {
-  if (viewMode.value !== 'render' || !isMarkdown.value || !selected.value) {
-    mdHtml.value = ''
+/**
+ * 渲染后的收尾：文档里的资源和链接都得改写成引擎的取文件地址。
+ * 不改的话，`![](img/a.png)` 是裂图、`[附录](附录.md)` 点开是 404。
+ * 相对链接不往外甩，留在面板里开新 tab——看文档的人不该为了翻一章跳去浏览器。
+ */
+function decorateDoc(html: string, dir: string): string {
+  // markdown-it 会把 href 里的中文转成百分号编码，这里先还原成人能对得上的路径
+  const abs = (p: string) => {
+    let raw = p
+    try {
+      raw = decodeURIComponent(p)
+    } catch {
+      /* 不是合法的百分号编码就按原样用 */
+    }
+    return raw.startsWith('/') ? raw.slice(1) : dir ? `${dir}/${raw}` : raw
+  }
+  return html
+    .replace(/<img src="(?!https?:|data:)([^"]+)"/g, (_m, p1: string) => `<img src="${esc(fileViewUrl(abs(p1)))}"`)
+    .replace(/<a href="(?!https?:|#|mailto:|tel:)([^"]+)"/g, (_m, p1: string) => `<a data-doc="${esc(abs(p1))}" href="#"`)
+    .replace(/<a href="(https?:[^"]+)"/g, '<a href="$1" target="_blank" rel="noreferrer noopener"')
+    // 宽表要能横向滚，又不能把 table 本身改成 display:block（那样列宽会被压扁），
+    // 所以补一层滚动容器——和 vue-stream-markdown 给自己表格包的那层是同一个意思
+    .replace(/<table>/g, '<div class="kw-tablewrap"><table>')
+    .replace(/<\/table>/g, '</table></div>')
+}
+
+/**
+ * 文档内的跳转：相对文件在面板里开 tab，`#小节` 就地滚过去。
+ * 两条都不放给浏览器默认行为——相对路径会 404，`#` 还会把 hash 写进应用路由。
+ */
+function onDocClick(e: MouseEvent) {
+  const a = (e.target as Element | null)?.closest?.('a')
+  if (!a) return
+  const doc = a.getAttribute('data-doc')
+  if (doc) {
+    e.preventDefault()
+    openFileTab(doc)
     return
   }
+  const href = a.getAttribute('href') || ''
+  if (!href.startsWith('#') || href.length < 2) return
+  e.preventDefault()
+  let id = href.slice(1)
   try {
-    const r = await fetch(fileViewUrl(selected.value))
-    if (!r.ok) {
-      mdHtml.value = ''
-      return
-    }
-    let html = mdRenderer.render(await r.text())
-    // md 里的相对路径图片改走引擎加载，否则在预览容器里全是裂图
-    const dir = dirName(selected.value)
-    html = html.replace(/<img src="(?!https?:|data:)([^"]+)"/g, (_m, p1: string) => {
-      const rel = p1.startsWith('/') ? p1.slice(1) : dir ? `${dir}/${p1}` : p1
-      return `<img src="${fileViewUrl(rel)}"`
-    })
-    mdHtml.value = html
+    id = decodeURIComponent(id)
   } catch {
-    mdHtml.value = ''
+    /* 同上 */
+  }
+  const target = docBody.value?.querySelector(`[id="${CSS.escape(id)}"]`)
+  target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+watch([active, viewMode], async () => {
+  mdHtml.value = ''
+  if (viewMode.value !== 'render' || !isMarkdown.value || !selected.value) return
+  const name = selected.value
+  mdLoading.value = true
+  try {
+    const r = await fetch(fileViewUrl(name))
+    if (!r.ok) return
+    const html = decorateDoc(mdRenderer.render(await r.text()), dirName(name))
+    // 等待期间用户可能已经切走了：晚到的结果不能盖掉当前那个文件
+    if (selected.value === name) mdHtml.value = html
+  } catch {
+    /* 读不到就退回下面的 iframe 原文预览 */
+  } finally {
+    mdLoading.value = false
   }
 })
 
@@ -490,18 +622,20 @@ defineExpose({
         >
           <FolderOpen class="size-3.5" /> 文件
           <Badge v-if="changed.length" variant="secondary" class="ml-0.5 text-[10px]">{{ changed.length }}</Badge>
+        </button>
+        <!-- 清掉重复副本：不能嵌在上面那个 button 里（button 套 button 是非法结构，
+             浏览器会把内层拆出去，点一下「文件」tab 就顺手把文件清了） -->
         <Button
           v-if="dupCount > 0"
           variant="ghost"
           size="sm"
-          class="h-6 gap-1 px-1.5 text-[10px] text-muted-foreground"
+          class="h-6 shrink-0 gap-1 px-1.5 text-[10px] text-muted-foreground"
           :disabled="tidying"
           title="把根目录里的重复副本搬进 .trash（捞得回来）"
           @click="handleTidy"
         >
           <Sparkles class="size-3" />清掉重复的 {{ dupCount }}
         </Button>
-        </button>
         <div
           v-for="t in tabs"
           :key="t"
@@ -545,89 +679,69 @@ defineExpose({
 
     <!-- ══════════ 文件列表 ══════════ -->
     <template v-if="active === FILES_TAB">
-      <!-- 预览服务条：HTML 要在手机上看就走它 -->
-      <div class="flex items-center gap-1.5 border-b border-border px-3 py-2">
-        <Globe class="size-3.5 shrink-0 text-muted-foreground" />
-        <span class="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
-          {{ preview.running ? '预览服务运行中' : '预览服务未启动' }}
-        </span>
-        <button
-          v-if="preview.running"
-          class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-          title="复制链接"
-          @click="copyLink"
-        >
-          <Copy class="size-3.5" />
-        </button>
-        <button
-          v-if="preview.running"
-          class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-          title="在浏览器打开"
-          @click="openInBrowser"
-        >
-          <ExternalLink class="size-3.5" />
-        </button>
-        <Button variant="ghost" size="sm" class="h-6 gap-1 px-1.5 text-[11px]" :disabled="starting" @click="togglePreviewServer">
-          <Play v-if="!preview.running" class="size-3" />
-          <Square v-else class="size-3" />
-          {{ preview.running ? '停止' : '启动' }}
-        </Button>
-      </div>
-      <label class="flex items-center gap-1.5 border-b border-border px-3 py-1.5 text-[11px] text-muted-foreground">
-        <input v-model="lanOpen" type="checkbox" class="size-3 accent-primary" @change="refreshPreview" />
-        对局域网开放（手机扫码可看）
-      </label>
-
       <div class="min-h-0 flex-1 overflow-y-auto p-2">
-        <!-- 进度：PROGRESS.md 的勾选清单（MiniMax 右栏同款位置） -->
-        <div v-if="milestones?.length" class="mb-2 overflow-hidden rounded-md border border-border">
-          <button
-            type="button"
-            class="flex w-full cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-left text-xs font-medium"
-            @click="secOpen.progress = !secOpen.progress"
-          >
-            <ChevronRight class="size-3 transition-transform" :class="secOpen.progress && 'rotate-90'" /> 进度
-          </button>
-          <ul v-if="secOpen.progress" class="space-y-1 px-2.5 pb-2">
-            <li v-for="(it, i) in milestones" :key="i" class="flex items-start gap-1.5 text-[11px]">
-              <CheckCircle2 v-if="it.done" class="mt-0.5 size-3 shrink-0 text-emerald-500" />
-              <Circle v-else class="mt-0.5 size-3 shrink-0 text-muted-foreground/40" />
-              <span :class="it.done ? 'text-muted-foreground' : ''">{{ it.text }}</span>
-            </li>
-          </ul>
-        </div>
+        <!-- 进度 / Agents / 工作文件夹：三个信息块合成一张卡、用分隔线切开。
+            以前是三个各自带边框的盒子摞起来，光边框和间距就吃掉半屏，文件反而被挤到底下看不见。 -->
+        <div
+          v-if="milestones?.length || agents?.length || folder || flatFiles.length"
+          class="mb-2.5 divide-y divide-border/70 overflow-hidden rounded-lg border border-border"
+        >
+          <section v-if="milestones?.length">
+            <button
+              type="button"
+              class="flex w-full cursor-pointer items-center gap-1.5 px-2.5 py-2 text-left text-xs font-medium"
+              @click="secOpen.progress = !secOpen.progress"
+            >
+              <ChevronRight class="size-3 shrink-0 transition-transform" :class="secOpen.progress && 'rotate-90'" />
+              <span class="flex-1">进度</span>
+              <span class="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                {{ milestones.filter((m) => m.done).length }}/{{ milestones.length }}
+              </span>
+            </button>
+            <ul v-if="secOpen.progress" class="space-y-1 px-2.5 pb-2.5">
+              <li v-for="(it, i) in milestones" :key="i" class="flex items-start gap-1.5 text-[11px]">
+                <CheckCircle2 v-if="it.done" class="mt-0.5 size-3 shrink-0 text-emerald-500" />
+                <Circle v-else class="mt-0.5 size-3 shrink-0 text-muted-foreground/40" />
+                <span :class="it.done ? 'text-muted-foreground' : ''">{{ it.text }}</span>
+              </li>
+            </ul>
+          </section>
 
-        <!-- Agents：委派了谁、干完没有 -->
-        <div v-if="agents?.length" class="mb-2 overflow-hidden rounded-md border border-border">
-          <button
-            type="button"
-            class="flex w-full cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-left text-xs font-medium"
-            @click="secOpen.agents = !secOpen.agents"
-          >
-            <ChevronRight class="size-3 transition-transform" :class="secOpen.agents && 'rotate-90'" /> Agents
-          </button>
-          <ul v-if="secOpen.agents" class="space-y-1 px-2.5 pb-2">
-            <li v-for="(a, i) in agents" :key="i" class="flex items-center gap-1.5 text-[11px]">
-              <CheckCircle2 v-if="a.done" class="size-3 shrink-0 text-emerald-500" />
-              <Loader2 v-else class="size-3 shrink-0 animate-spin text-primary" />
-              <span class="min-w-0 flex-1 truncate" :class="!a.done && 'text-muted-foreground'">{{ a.name }}</span>
-              <span v-if="!a.done" class="shrink-0 text-[10px] text-muted-foreground">执行中</span>
-            </li>
-          </ul>
-        </div>
+          <!-- Agents：委派了谁、干完没有 -->
+          <section v-if="agents?.length">
+            <button
+              type="button"
+              class="flex w-full cursor-pointer items-center gap-1.5 px-2.5 py-2 text-left text-xs font-medium"
+              @click="secOpen.agents = !secOpen.agents"
+            >
+              <ChevronRight class="size-3 shrink-0 transition-transform" :class="secOpen.agents && 'rotate-90'" />
+              <span class="flex-1">Agents</span>
+              <span class="shrink-0 text-[10px] tabular-nums text-muted-foreground">{{ agents.length }}</span>
+            </button>
+            <ul v-if="secOpen.agents" class="space-y-1 px-2.5 pb-2.5">
+              <li v-for="(a, i) in agents" :key="i" class="flex items-center gap-1.5 text-[11px]">
+                <CheckCircle2 v-if="a.done" class="size-3 shrink-0 text-emerald-500" />
+                <Loader2 v-else class="size-3 shrink-0 animate-spin text-primary" />
+                <span class="min-w-0 flex-1 truncate" :class="!a.done && 'text-muted-foreground'">{{ a.name }}</span>
+                <span v-if="!a.done" class="shrink-0 text-[10px] text-muted-foreground">执行中</span>
+              </li>
+            </ul>
+          </section>
 
-        <!-- 工作文件夹：成果落在哪个文件夹一目了然 -->
-        <div v-if="folder || flatFiles.length" class="mb-1 overflow-hidden rounded-md border border-border">
-          <button
-            type="button"
-            class="flex w-full cursor-pointer items-center gap-1.5 px-2.5 py-1.5 text-left text-xs font-medium"
-            @click="secOpen.folder = !secOpen.folder"
-          >
-            <ChevronRight class="size-3 transition-transform" :class="secOpen.folder && 'rotate-90'" /> 工作文件夹
-          </button>
-          <p v-if="secOpen.folder" class="truncate px-2.5 pb-1.5 text-[11px] text-muted-foreground">
-            <FolderOpen class="mr-1 inline size-3" />{{ folder || 'workspace' }}
-          </p>
+          <!-- 工作文件夹：成果落在哪个文件夹一目了然 -->
+          <section v-if="folder || flatFiles.length">
+            <button
+              type="button"
+              class="flex w-full cursor-pointer items-center gap-1.5 px-2.5 py-2 text-left text-xs font-medium"
+              @click="secOpen.folder = !secOpen.folder"
+            >
+              <ChevronRight class="size-3 shrink-0 transition-transform" :class="secOpen.folder && 'rotate-90'" />
+              <span class="flex-1">工作文件夹</span>
+            </button>
+            <p v-if="secOpen.folder" class="truncate px-2.5 pb-2.5 text-[11px] text-muted-foreground">
+              <FolderOpen class="mr-1 inline size-3" />{{ folder || 'workspace' }}
+            </p>
+          </section>
         </div>
 
         <div v-if="!flatFiles.length" class="px-2 py-10 text-center text-xs text-muted-foreground">
@@ -671,6 +785,34 @@ defineExpose({
           </li>
         </ul>
       </div>
+
+      <!-- 预览服务（把工作目录当站点跑起来、手机扫码看）：收成底部一行。
+           它原本是列表顶上的一条横幅 + 一个局域网勾选框，占掉两整行首屏位置，
+           而这功能多数人一次都不点——留在底部，需要的人找得到，不需要的人当它不存在。 -->
+      <div class="flex h-8 shrink-0 items-center gap-1.5 border-t border-border px-3 text-[11px] text-muted-foreground">
+        <Globe class="size-3.5 shrink-0" :class="preview.running && 'text-emerald-500'" />
+        <span class="min-w-0 flex-1 truncate">{{ preview.running ? '手机可扫码预览' : '手机扫码预览' }}</span>
+        <template v-if="preview.running">
+          <button class="rounded p-0.5 hover:bg-accent hover:text-foreground" title="复制链接" @click="copyLink">
+            <Copy class="size-3" />
+          </button>
+          <button class="rounded p-0.5 hover:bg-accent hover:text-foreground" title="在浏览器打开" @click="openInBrowser">
+            <ExternalLink class="size-3" />
+          </button>
+        </template>
+        <label v-else class="flex shrink-0 cursor-pointer items-center gap-1" title="开启后同一局域网内的手机可以访问">
+          <input v-model="lanOpen" type="checkbox" class="size-3 accent-primary" @change="refreshPreview" />
+          局域网
+        </label>
+        <button
+          type="button"
+          class="shrink-0 cursor-pointer rounded px-1.5 py-0.5 transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+          :disabled="starting"
+          @click="togglePreviewServer"
+        >
+          {{ preview.running ? '停止' : '启动' }}
+        </button>
+      </div>
     </template>
 
     <!-- ══════════ 文件预览 ══════════ -->
@@ -710,30 +852,49 @@ defineExpose({
         >
           <RefreshCw class="size-3.5" />
         </button>
-        <a
-          :href="fileViewUrl(selected)"
-          target="_blank"
-          rel="noreferrer"
-          class="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          title="新窗口打开"
-        >
-          <ExternalLink class="size-3.5" />
-        </a>
-        <a
-          :href="fileDownloadUrl(selected)"
-          class="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          title="下载"
-        >
-          <Download class="size-3.5" />
-        </a>
-        <button
-          type="button"
-          class="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          title="用本机程序打开"
-          @click="openNative(selected)"
-        >
-          <FolderOpen class="size-3.5" />
-        </button>
+        <!-- 低频操作收进 ⋯：下载/新窗口/本机打开/访达 四个图标常驻，在 400px 的面板里
+             比文件名还抢眼，而它们一天也用不上一次 -->
+        <div class="relative shrink-0">
+          <button
+            type="button"
+            class="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            :class="fileMenuOpen && 'bg-accent text-foreground'"
+            title="更多操作"
+            @click="fileMenuOpen = !fileMenuOpen"
+          >
+            <MoreHorizontal class="size-3.5" />
+          </button>
+          <template v-if="fileMenuOpen">
+            <div class="fixed inset-0 z-40" @click="fileMenuOpen = false" />
+            <div class="absolute right-0 top-7 z-50 w-44 overflow-hidden rounded-lg border border-border bg-popover py-1 text-xs shadow-xl">
+              <a
+                :href="fileDownloadUrl(selected)"
+                class="flex items-center gap-2 px-2.5 py-1.5 hover:bg-accent"
+                @click="fileMenuOpen = false"
+              >
+                <Download class="size-3.5" />下载
+              </a>
+              <a
+                :href="fileViewUrl(selected)"
+                target="_blank"
+                rel="noreferrer"
+                class="flex items-center gap-2 px-2.5 py-1.5 hover:bg-accent"
+                @click="fileMenuOpen = false"
+              >
+                <ExternalLink class="size-3.5" />新窗口打开
+              </a>
+              <button type="button" class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-accent" @click="openNative(selected); fileMenuOpen = false">
+                <FolderOpen class="size-3.5" />用本机程序打开
+              </button>
+              <button type="button" class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-accent" @click="revealFile(selected); fileMenuOpen = false">
+                <FolderOpen class="size-3.5" />在访达中显示
+              </button>
+              <button type="button" class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-accent" @click="copyFileLink(); fileMenuOpen = false">
+                <Link2 class="size-3.5" />复制链接
+              </button>
+            </div>
+          </template>
+        </div>
       </div>
 
       <!-- 源码模式 -->
@@ -747,9 +908,9 @@ defineExpose({
 
       <!-- 渲染模式 -->
       <div v-else class="flex min-h-0 flex-1 flex-col">
-        <!-- 浏览器条（Peak Code 截图同款）：← → ⟳ + 可编辑地址栏 + ⋯ 菜单 -->
+        <!-- 浏览器条：只给真网页（HTML/SVG）。md / json / txt 这些不该摆一排导航控件和接口地址 -->
         <div
-          v-if="previewable && !structured && !csvRows.length"
+          v-if="isWebPage && selected"
           class="flex h-9 shrink-0 items-center gap-1.5 border-b border-border bg-muted/30 px-2"
         >
           <div class="flex shrink-0 items-center gap-0.5">
@@ -770,30 +931,6 @@ defineExpose({
             placeholder="输入文件名或网址，回车打开"
             @keydown.enter="navigate"
           />
-          <div class="relative shrink-0">
-            <button
-              type="button"
-              class="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-              title="更多"
-              @click="menuOpen = !menuOpen"
-            >
-              <MoreHorizontal class="size-3.5" />
-            </button>
-            <div v-if="menuOpen" class="absolute right-0 top-7 z-20 w-44 rounded-lg border border-border bg-background py-1 text-xs shadow-lg">
-              <button type="button" class="flex w-full items-center gap-2 px-2.5 py-1.5 hover:bg-accent" @click="downloadFile">
-                <Download class="size-3.5" />下载
-              </button>
-              <button type="button" class="flex w-full items-center gap-2 px-2.5 py-1.5 hover:bg-accent" @click="openNewWindow">
-                <ExternalLink class="size-3.5" />新窗口打开
-              </button>
-              <button type="button" class="flex w-full items-center gap-2 px-2.5 py-1.5 hover:bg-accent" @click="openNative(selected); menuOpen = false">
-                <FolderOpen class="size-3.5" />用本机程序打开
-              </button>
-              <button type="button" class="flex w-full items-center gap-2 px-2.5 py-1.5 hover:bg-accent" @click="copyLink(); menuOpen = false">
-                <Copy class="size-3.5" />复制链接
-              </button>
-            </div>
-          </div>
         </div>
         <!-- 结构化：docx / xlsx / pptx / zip（服务端拆包） -->
         <div v-if="structured" class="min-h-0 flex-1 overflow-y-auto bg-background">
@@ -905,10 +1042,12 @@ defineExpose({
 
         <!-- Markdown：文档排版渲染（源码模式看原文） -->
         <div
-          v-else-if="isMarkdown && mdHtml"
-          class="prose prose-sm dark:prose-invert min-h-0 flex-1 overflow-y-auto p-4 text-sm leading-relaxed"
-          v-html="mdHtml"
-        />
+          v-else-if="isMarkdown && (mdLoading || mdHtml)"
+          class="min-h-0 flex-1 overflow-y-auto bg-background"
+        >
+          <p v-if="mdLoading && !mdHtml" class="px-5 py-10 text-center text-xs text-muted-foreground">正在排版…</p>
+          <div v-else ref="docBody" class="kw-doc mx-auto max-w-3xl px-5 py-5" v-html="mdHtml" @click="onDocClick" />
+        </div>
 
         <!-- 音视频：原生播放器 -->
         <video

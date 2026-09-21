@@ -3,7 +3,6 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Blocks,
-  Bot,
   BookOpen,
   ChevronDown,
   CircleAlert,
@@ -17,12 +16,12 @@ import {
   Trash2,
 } from 'lucide-vue-next'
 import { getInfo, pickFolder } from '@/api/client'
-import {listEngineSkills, listProjects, createProject, switchProject, deleteProject, DEFAULT_PROJECT} from '@/api/engine'
+import {listEngineSkills, listProjects, createProject, switchProject, deleteProject, deleteSession, DEFAULT_PROJECT} from '@/api/engine'
 import AccountBar from '@/components/sidebar/AccountBar.vue'
 import { toast } from 'vue-sonner'
 import { uiPrefs } from '@/composables/useUiPrefs'
 import { PALETTE_PAGES } from '@/navigation'
-import { readSessions, removeSessionById, SESSIONS_CHANGED, type SessionMeta } from '@/composables/useSessions'
+import { readSessions, removeSessionById, syncScheduleSessions, SESSIONS_CHANGED, type SessionMeta } from '@/composables/useSessions'
 import { forgetRun, runningSessions } from '@/composables/useChatRuns'
 import { timeAgo } from '@/lib/time'
 
@@ -221,9 +220,32 @@ const sessions = ref<SessionMeta[]>([])
 /** 列表默认展开：参考版那两个「任务 (n) / 空间 (n)」是可收起的，收起后侧栏才腾得出地方 */
 const tasksOpen = ref(true)
 const spacesOpen = ref(true)
+/** 任务列表默认只露 5 条：历史攒到几十条之后，整屏都是任务名，反而找不到「新任务」按钮了 */
+const tasksExpanded = ref(false)
+const TASKS_PREVIEW = 5
 
 function loadSessions() {
   sessions.value = readSessions().filter((s) => (s.project || DEFAULT_PROJECT) === activeProject.value)
+}
+
+/** 切换工作空间时收起展开态：上一条看的是哪个空间的「全部」，跟到这个空间没有意义 */
+watch(activeProject, () => (tasksExpanded.value = false))
+
+// ---------- 定时任务的会话：引擎侧跑的，本地索引里本来没有 ----------
+/**
+ * 定时任务的执行现在也是一条会话，但它的记录在引擎里，本地这份 localStorage 索引
+ * 只由 ChatView 写入。这里定期把运行记录合并进索引，左侧才看得见「有个任务正在跑」。
+ */
+const scheduledRunning = ref<string[]>([])
+
+async function syncSessions() {
+  scheduledRunning.value = await syncScheduleSessions()
+}
+
+let syncTimer: ReturnType<typeof setInterval> | null = null
+
+function onWindowFocus() {
+  void syncSessions()
 }
 
 /** 排序：按设置 → 通用里选的「线程排序」（最近活跃 / 创建时间） */
@@ -240,17 +262,39 @@ const filteredSessions = computed(() => {
 })
 
 /**
+ * 实际渲染的任务条数。
+ * <p>
+ * 默认只给最近 5 条（filteredSessions 已按最近活跃排好序），要看更多点「展开全部」。
+ * 搜索时不截断：用户已经用关键词把范围收窄了，再藏起来等于让他白搜。
+ */
+const visibleSessions = computed(() => {
+  if (tasksExpanded.value || searchKw.value.trim()) return filteredSessions.value
+  return filteredSessions.value.slice(0, TASKS_PREVIEW)
+})
+
+/** 前面还有多少条被折叠起来了（用于「展开全部」按钮上的数字） */
+const hiddenSessionCount = computed(() => Math.max(0, filteredSessions.value.length - visibleSessions.value.length))
+
+/**
  * 正在跑的任务 id。
  * <p>
  * 读的是运行态 store 而不是引擎接口：任务可以在别的会话里、甚至用户已经切到别的页面之后
  * 还在跑，侧栏得照样能标出来——否则「多任务」就只是一句空话，用户根本不知道有几个在跑。
+ * <p>
+ * 定时任务的会话不在这个 store 里（它由引擎直接开、没有前端发起的那一轮），所以把轮询到的
+ * 运行记录里「还在跑」的那些并进来，点「立即跑」之后侧栏立刻就有转圈。
  */
-const runningIds = computed(() => new Set(runningSessions()))
+const runningIds = computed(() => new Set([...runningSessions(), ...scheduledRunning.value]))
 
 function removeSession(id: string) {
   if (!window.confirm('删除该任务及其对话记录？')) return
   // 正在跑的先掐掉再删记录，不然事件还会往一个已经删掉的会话里写
   forgetRun(id)
+  // 引擎那份 transcript 也删掉：本地索引只是个目录，留着引擎那份记录，
+  // 定时任务下一轮同步就会照着它把这条会话原样捞回来
+  void deleteSession(id).catch(() => {
+    /* 引擎不在也无所谓：本地墓碑已经记下了，不会再被同步捞回来 */
+  })
   removeSessionById(id) // 写入会广播 sessions-changed，loadSessions 挂在那个事件上，这里不用再手动刷
 }
 
@@ -264,6 +308,11 @@ onMounted(() => {
   window.addEventListener(SESSIONS_CHANGED, loadSessions)
   window.addEventListener('kylinwork:projects-changed', onProjectsChanged)
   window.addEventListener('keydown', onGlobalKey)
+  window.addEventListener('focus', onWindowFocus)
+  // 定时任务在引擎里跑，本地不会收到任何事件：只能定期对一次账。
+  // 10 秒是「点立即跑之后很快就能看见」和「不要一直打接口」之间的折中
+  void syncSessions()
+  syncTimer = setInterval(() => void syncSessions(), 10000)
   void (async () => {
     try {
       env.value = await getInfo()
@@ -285,6 +334,9 @@ onUnmounted(() => {
   window.removeEventListener(SESSIONS_CHANGED, loadSessions)
   window.removeEventListener('kylinwork:projects-changed', onProjectsChanged)
   window.removeEventListener('keydown', onGlobalKey)
+  window.removeEventListener('focus', onWindowFocus)
+  if (syncTimer) clearInterval(syncTimer)
+  syncTimer = null
 })
 
 // ---------- 删除二选一菜单：当前展开的是哪个工作空间 ----------
@@ -426,14 +478,6 @@ const filteredProjects = computed(() => {
       </RouterLink>
       <RouterLink
         class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-foreground/90 transition-colors hover:bg-accent"
-        to="/experts"
-        @click="emit('navigate')"
-      >
-        <Bot class="size-4 text-muted-foreground" />
-        专家广场
-      </RouterLink>
-      <RouterLink
-        class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm text-foreground/90 transition-colors hover:bg-accent"
         to="/experts?tab=skills"
         @click="emit('navigate')"
       >
@@ -490,7 +534,7 @@ const filteredProjects = computed(() => {
           还没有任务，点「新任务」开始
         </p>
         <ul v-if="tasksOpen" class="space-y-0.5">
-          <li v-for="s in filteredSessions" :key="s.id" class="group flex items-center gap-1">
+          <li v-for="s in visibleSessions" :key="s.id" class="group flex items-center gap-1">
             <button
               class="min-w-0 flex-1 truncate rounded-md px-2.5 py-1.5 text-left text-[14px] text-foreground/85 transition-colors hover:bg-accent"
               :title="s.lastError ? `${s.title}（最后一轮失败）` : s.title"
@@ -525,6 +569,23 @@ const filteredProjects = computed(() => {
             </button>
           </li>
         </ul>
+        <!-- 只露最近 5 条；历史多了就靠这个按钮展开，不占常态空间 -->
+        <button
+          v-if="tasksOpen && hiddenSessionCount > 0"
+          class="mt-0.5 flex w-full items-center justify-center gap-1 rounded-md px-2 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          @click="tasksExpanded = true"
+        >
+          展开全部（还有 {{ hiddenSessionCount }} 条）
+          <ChevronDown class="size-3.5 shrink-0" />
+        </button>
+        <button
+          v-else-if="tasksOpen && tasksExpanded && filteredSessions.length > TASKS_PREVIEW"
+          class="mt-0.5 flex w-full items-center justify-center gap-1 rounded-md px-2 py-1.5 text-[13px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          @click="tasksExpanded = false"
+        >
+          收起
+          <ChevronDown class="size-3.5 shrink-0 rotate-180" />
+        </button>
       </div>
 
       <!-- 工作空间：选一个本地文件夹，所有产出都在里面完成 -->

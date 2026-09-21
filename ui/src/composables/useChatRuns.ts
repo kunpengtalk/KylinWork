@@ -15,6 +15,7 @@
 import { reactive, ref } from 'vue'
 import { toast } from 'vue-sonner'
 import type { Msg } from '@/components/chat/types'
+import type { KnowledgeCitation } from '@/api/client'
 import {
   ChatTransportError,
   answerAsk,
@@ -88,7 +89,7 @@ export interface RunState {
 /**
  * 当前正在看的会话。
  * <p>
- * 必须放在模块级：离开对话页（去专家广场、设置…）再回来，ChatView 是**重新创建**的，
+ * 必须放在模块级：离开对话页（去专家·技能·连接器、设置…）再回来，ChatView 是**重新创建**的，
  * 组件自己的 sessionId 会归零。以前那一下会新建一个空会话，于是「还在跑的任务」当场从屏幕上消失——
  * 用户看到的正是「任务在跑，但页面没动静」。记住它，回来还落回同一个会话。
  */
@@ -402,6 +403,11 @@ function applyEvent(run: RunState, ev: EngineEvent, replaying = false): void {
       if (m && e.items?.length) m.sources = e.items
       break
     }
+    case 'citations': {
+      const e = ev as { citations?: KnowledgeCitation[] }
+      if (m && e.citations?.length) m.citations = e.citations
+      break
+    }
     case 'usage': {
       if (m) m.usage = ev as Record<string, unknown>
       break
@@ -615,10 +621,11 @@ export function hydrateRun(sessionId: string): Promise<RunState> {
 
 async function doHydrate(run: RunState): Promise<RunState> {
   const sessionId = run.sessionId
-  // 从空开始回放：失败重试时不会把上一条消息写第二遍
-  run.messages = []
   try {
     const s = await getSession(sessionId)
+    // 拿到了才从空开始重放。以前是先清空再请求：失败一次就把用户正看着的那段对话擦掉了，
+    // 紧接着 ChatView 还会因为「一条消息都没有」再弹一次误导性的提示
+    run.messages = []
     const hist = ((s as { transcript?: unknown[] }).transcript || s.history || []) as Array<{
       type?: string
       role?: string
@@ -683,7 +690,17 @@ async function doHydrate(run: RunState): Promise<RunState> {
     run.hydrated = true
     run.rev++
   } catch (e) {
-    toast.error('加载历史会话失败：' + (e as Error).message)
+    const err = e as Error & { status?: number }
+    if (err.status === 404) {
+      // 侧栏历史是本地 localStorage 里的索引，引擎那份记录按数据目录存。换过运行方式
+      //（仓库里 npm run app ↔ 装好的客户端）之后，索引里的 id 引擎这边可能根本没有——
+      // 内容没丢，只是不在当前数据目录下，别让用户以为是数据没了
+      console.warn('[hydrate] 引擎里没有这个会话（内容可能在另一个数据目录下）:', sessionId)
+      toast.error('这条会话在本地引擎里不存在：内容可能不在当前数据目录下（换过运行方式就会这样）')
+    } else {
+      console.warn('[hydrate] 读取失败:', sessionId, err.status ?? '-', err.message)
+      toast.error('加载历史会话失败：' + err.message)
+    }
   }
   return run
 }

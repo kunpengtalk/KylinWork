@@ -1,6 +1,6 @@
 {
   "name": "kylinwork",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "KylinWork — AI Agent 办公工作台（自然语言下任务，AI 自主规划执行，交付 PPT/Word/Excel 等成果文件）",
   "engines": {
     "node": ">=22.19.0"

@@ -1,4 +1,5 @@
 /** 聊天主区用到的共享类型：ChatView 与拆分出去的消息组件都从这里取，避免各自定义一份 */
+import type { KnowledgeCitation } from '@/api/client'
 
 export interface ToolCall {
   id: string
@@ -49,6 +50,8 @@ export interface Msg {
   usage?: Record<string, unknown>
   milestones?: { text: string; done: boolean }[]
   sources?: { title?: string; url?: string }[]
+  /** 本轮知识库检索命中的引用（答复底下的「知识来源」） */
+  citations?: KnowledgeCitation[]
   /** 本轮产出的文件（点一下在右侧 Artifact 里打开） */
   files?: string[]
   /** 发出时间 / 结束时间：消息尾部的时刻、以及「已完成 3m12s」这个耗时 */

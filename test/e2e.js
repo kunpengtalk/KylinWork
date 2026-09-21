@@ -1170,6 +1170,62 @@ async function testSchedulerRuntime() {
   await assert.rejects(() => sch.runOne("sch_不存在", "手动"), /任务不存在/, "不存在的任务应当报错");
   fs.rmSync(storePath, { force: true });
   console.log("✅ 定时任务运行时：睡过头补跑一次 / 不叠跑 / 结果真落盘");
+
+  await testSchedulerSessionHost();
+}
+
+/**
+ * 定时任务要开一条真会话。
+ * <p>
+ * 守两点：① 注入了 startSession 时，执行交给它，并把 session_id / 会话所属工作空间
+ * 写进运行记录、立刻落盘（前端就是靠这两格把定时任务列进左侧任务列表的）；
+ * ② 没注入时（测试 / 精简调用）老路径照常，不能因为加了新分支就把原来的路走断了。
+ */
+async function testSchedulerSessionHost() {
+  const { createScheduler } = require("../engine/scheduler");
+  const os = require("os");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "e2e-sched-sess-"));
+  const storePath = path.join(dir, "schedules.json");
+  const seen = [];
+  const sch = createScheduler({
+    runtime: { runTask: async () => { throw new Error("注入了 startSession 就不该再走 runtime 老路"); } },
+    storePath,
+    startSession: ({ item, run, workspaceDir }) => {
+      seen.push({ itemId: item.id, runId: run.id, workspaceDir });
+      // 容器侧只认它拿回来的 id 和 project，别的什么都不管
+      return { sessionId: "sch_" + run.id, project: "默认工作空间", done: Promise.resolve("会话里跑完了") };
+    },
+  });
+  sch.stop();
+  const task = sch.add({ name: "带会话的任务", cron: "0 9 * * *", task: "写晨报" });
+
+  const reply = await sch.runOne(task.id, "手动");
+  assert.strictEqual(reply, "会话里跑完了", "startSession 的返回没被当成执行结果");
+  assert.strictEqual(seen.length, 1, "startSession 没被调到，或调了不止一次");
+  assert(seen[0].runId, "startSession 没拿到本次运行的记录");
+  assert(seen[0].workspaceDir && path.isAbsolute(seen[0].workspaceDir), "没把实际生效的工作空间目录交出去");
+  const rec = sch.runs(1)[0];
+  assert.strictEqual(rec.session_id, "sch_" + rec.id, "运行记录里没留下会话 id，前端就列不出这条会话");
+  assert.strictEqual(rec.session_project, "默认工作空间", "运行记录里没留下会话所属工作空间");
+  assert.strictEqual(rec.ok, true, "跑完了却没标记成功");
+  const onDisk = JSON.parse(fs.readFileSync(storePath, "utf8")).runs.find((r) => r.id === rec.id);
+  assert.strictEqual(onDisk.session_id, rec.session_id, "会话 id 没落盘");
+  assert.strictEqual(sch.list().find((t) => t.id === task.id).session_id, rec.session_id, "任务上没记住最近一次的会话 id");
+
+  // 没注入 startSession：走老路径，runtime 直接被调
+  let called = 0;
+  const plain = createScheduler({
+    runtime: { runTask: async () => { called++; return { finalText: "老路跑完了" }; } },
+    storePath: path.join(dir, "schedules-plain.json"),
+  });
+  plain.stop();
+  const plainTask = plain.add({ name: "没有会话宿主", cron: "0 9 * * *", task: "干活" });
+  assert.strictEqual(await plain.runOne(plainTask.id, "手动"), "老路跑完了", "没注入 startSession 时老路径断了");
+  assert.strictEqual(called, 1, "没注入 startSession 时没有退回 runtime.runTask");
+  assert(!plain.runs(1)[0].session_id, "没开会话却写了 session_id");
+
+  fs.rmSync(dir, { recursive: true, force: true });
+  console.log("✅ 定时任务会话：执行挂到真会话上 / 记录落盘 / 没宿主时老路不断");
 }
 
 /**

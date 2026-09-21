@@ -233,7 +233,7 @@ function historyChars(history) {
 
 // 「可重取」的工具结果：截掉不心疼——要用的时候再调一次工具就能拿回原文。
 // 跑代码的输出/报错不在此列：那是一次性的现场证据，截掉就真没了。
-const REFETCHABLE_TOOLS = new Set(["read_file", "fetch_url", "list_files", "search_files", "library_read", "library_list", "web_search", "render_page", "check_page"]);
+const REFETCHABLE_TOOLS = new Set(["read_file", "fetch_url", "list_files", "search_files", "library_read", "library_list", "knowledge_search", "web_search", "render_page", "check_page"]);
 
 // 削到多低才收手。削"刚好够"是个隐形的烧钱姿势：一超预算就每步再削一点点，
 // 而历史被改了一个字节，后面整段缓存前缀就作废——于是每一步都是全价重买。
@@ -361,7 +361,8 @@ function createAgentRuntime({ config, llm, mcpManager, experts, expertTeams = []
 - check_page：验收做好的网页（静态体检 + 真浏览器打开一遍看有没有报错、是不是白屏）。交付 HTML 之前必须跑
 - gen_diagram：文本描述 → 专业图（mermaid 流程/时序/甘特、dot 架构图、echarts 数据图表、plantuml UML），一次生成 SVG+PNG 文件。文档/PPT/飞书文档要配图一律用它，不要手写 SVG 文件
 - use_skill：加载技能包（做对应任务前先加载）
-- library_list / library_read：查看用户的资料库与灵感笔记（跨项目共享的长期参考资料，任务涉及用户偏好/素材时先查）`;
+- library_list / library_read：查看用户的资料库与灵感笔记（跨项目共享的长期参考资料，任务涉及用户偏好/素材时先查）
+- knowledge_search：检索**知识库**（用户上传的资料集，和资料库是两回事）。对话里勾了知识库、或问题要依据用户上传的文档/手册/规范时用它；开场注入的那几段只是第一轮召回，要更多细节就用它继续查`;
     if ((config.im || {}).feishu && (config.im.feishu.app_id || config.im.feishu.doc_app_id)) {
       p += `\n- feishu_doc_create：把 Markdown 内容创建成飞书云文档交付给用户（用户要求"发到飞书/建飞书文档"时用它，不要自己找凭证写脚本）`;
     }
@@ -391,7 +392,7 @@ function createAgentRuntime({ config, llm, mcpManager, experts, expertTeams = []
    - 还是不行 → web_search 搜同样的内容，从能打开的转载页/镜像站/第三方数据站拿。
    把「需要登录 Cookie / 需要官方 API 权限」当结论直接停手，是不合格的交付。真要用户的登录态才继续，先把不需要登录也能拿到的那部分做完再说。
 5.2 **不许用文字问句结束回合**：严禁用「请告诉我你的选择：1... 2... 3...」「需要我尝试哪种方式？」这类话收尾，那是把活推回给用户。**技术路线**（用哪个库、抓哪条接口、跑几轮、代码怎么组织）的优劣你自己判断得了——挑最可能成的那个直接动手，失败了再换。这一条禁的是把选择题写在**回复正文**里，**不是禁 ask_user 工具**：成品形态会完全不同的岔路（封面图走生图还是排版截图、报告交 Word 还是 PDF、视频出横版还是竖版）该用 ask_user 就用，它弹的是可点的选项卡片，用户点一下就继续。同理，严禁把代码贴在回复里说"我能这样做"——能跑就 run_node / run_shell 真跑，回复里只放结论。
-5.3 **只读的活一次性并发发出去**：要查 5 个关键词、要抓 6 个链接、要读 3 个文件时，在同一轮里一口气发多个工具调用（web_search / fetch_url / render_page / read_file / list_files / library_read），系统会并发执行，只花最慢那一个的时间；一个一个来是把等待时间叠加。会写文件、跑命令、委派专家的调用不要和别的混在一轮里发——那些的先后顺序有意义，混在一起会被退回串行。
+5.3 **只读的活一次性并发发出去**：要查 5 个关键词、要抓 6 个链接、要读 3 个文件时，在同一轮里一口气发多个工具调用（web_search / fetch_url / render_page / read_file / list_files / library_read / knowledge_search），系统会并发执行，只花最慢那一个的时间；一个一个来是把等待时间叠加。会写文件、跑命令、委派专家的调用不要和别的混在一轮里发——那些的先后顺序有意义，混在一起会被退回串行。
 6. 完成后简要总结做了什么、生成了哪些文件。
 7. 始终用中文交流——包括报错说明、失败复盘、自我纠正这些中途叙述，任何时候都不许切成英文。工具返回的英文报错要翻成人话讲给用户听（原始报错可以放进代码块，但结论必须是中文）。
 8. 用户消息里的「@某文件名」指工作目录中的文件（用 read_file 读取）；「/某技能名」表示要求使用该技能（先 use_skill 加载）；「【任务类型：X】」是场景标签，按该场景的最佳实践来做。
@@ -516,7 +517,7 @@ mermaid 每次渲染的 id 本来就是随机数，根本不会撞，不需要�
     return p;
   }
 
-  const READ_ONLY_TOOLS = ["read_file", "list_files", "search_files", "fetch_url", "render_page", "web_search", "library_list", "library_read", "look_at_image"];
+  const READ_ONLY_TOOLS = ["read_file", "list_files", "search_files", "fetch_url", "render_page", "web_search", "library_list", "library_read", "knowledge_search", "look_at_image"];
 
   function toolList(depth, mode) {
     if (mode === "ask" || mode === "plan") {
@@ -559,7 +560,7 @@ mermaid 每次渲染的 id 本来就是随机数，根本不会撞，不需要�
    * 其余业务工具走 executeTool —— 安全闸门、成果子目录、审批、diff 全部原样保留在 tools.js。
    */
   function buildToolRunner(ctx) {
-    const { emit, depth, dl, stats, stopSignal, user, sec, taskLabel, baseDir, askUser, runToken, projectContext, llmOverride, touch } = ctx;
+    const { emit, depth, dl, stats, stopSignal, user, sec, taskLabel, baseDir, askUser, runToken, projectContext, llmOverride, touch, kbIds } = ctx;
     const loop = ctx.loop; // { hist, errs, nudged } 与 runTask 的 onTurnEnd 共享
 
     async function dispatch(name, input, signal) {
@@ -675,6 +676,7 @@ mermaid 每次渲染的 id 本来就是随机数，根本不会撞，不需要�
           taskLabel,
           runToken,
           baseDir,
+          kbIds,
           deadline: dl.value,
           stats,
           stopSignal,
@@ -720,6 +722,7 @@ mermaid 每次渲染的 id 本来就是随机数，根本不会撞，不需要�
             taskLabel,
             runToken,
             baseDir,
+            kbIds,
             deadline: dl.value,
             stats,
             stopSignal,
@@ -750,6 +753,8 @@ mermaid 每次渲染的 id 本来就是随机数，根本不会撞，不需要�
         stopSignal: signal || stopSignal,
         taskLabel,
         baseDir,
+        // 本次对话勾选的知识库：knowledge_search 的默认检索范围
+        kbIds,
         memory: { user },
       });
     }
@@ -966,7 +971,7 @@ mermaid 每次渲染的 id 本来就是随机数，根本不会撞，不需要�
    * @param emit    事件回调（SSE / IM 进度）
    * @returns { finalText }
    */
-  async function runTask({ history, emit = () => {}, systemPrompt, depth = 0, mode = "craft", deadline, stats, stopSignal, getInterject, user, projectContext, expertContext, sec, taskLabel, runToken, baseDir, llmOverride, askUser }) {
+  async function runTask({ history, emit = () => {}, systemPrompt, depth = 0, mode = "craft", deadline, stats, stopSignal, getInterject, user, projectContext, expertContext, sec, taskLabel, runToken, baseDir, llmOverride, askUser, kbIds }) {
     // 对话选的模型渠道：llmOverride 可能是渠道名串，也可能是旧 llm 对象（取 .provider / .model / .modelId）
     let providerName =
       (typeof llmOverride === "string" ? llmOverride : llmOverride && (llmOverride.provider || llmOverride.model)) ||
@@ -1110,7 +1115,7 @@ mermaid 每次渲染的 id 本来就是随机数，根本不会撞，不需要�
 
       const handler = buildToolRunner({
         emit, depth, dl, stats, stopSignal, user, sec, taskLabel, baseDir,
-        askUser, runToken, projectContext, llmOverride, loop, touch,
+        askUser, runToken, projectContext, llmOverride, loop, touch, kbIds,
       });
       const piTools = piAdapter.buildPiTools(toolList(depth, mode), handler, { readOnly: new Set(READ_ONLY_TOOLS) });
 

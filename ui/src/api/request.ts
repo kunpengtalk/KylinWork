@@ -26,11 +26,16 @@ function createHttp(baseURL: string): AxiosInstance {
     (resp) => resp,
     (error) => {
       const status = error?.response?.status
-      const message = error?.response?.data?.message ?? error?.message ?? '请求失败'
+      // 本地引擎的错误体是 { error }（Express 兜底处理器），平台网关是 { message }，两种都认
+      const message =
+        error?.response?.data?.message ?? error?.response?.data?.error ?? error?.message ?? '请求失败'
       if (status === 401) {
         handleUnauthorized()
       }
-      return Promise.reject(new Error(message))
+      // 状态码要跟着抛出去：调用方得按它分流（404 = 这条会话引擎里没有，跟网络故障不是一回事）
+      const err = new Error(message) as Error & { status?: number }
+      err.status = status
+      return Promise.reject(err)
     },
   )
 

@@ -74,6 +74,7 @@ export const TOOL_META: Record<string, ToolMeta> = {
   forget: M('忘掉', Trash2, 'memory', 'text'),
   library_list: M('查资料库', BookOpen, 'read', 'none'),
   library_read: M('读资料', BookOpen, 'read', 'path'),
+  knowledge_search: M('检索知识库', BookOpen, 'read', 'text'),
   look_at_image: M('看图', Eye, 'read', 'path'),
   // 协作
   use_skill: M('加载技能', Sparkles, 'read', 'text'),

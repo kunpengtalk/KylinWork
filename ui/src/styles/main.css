@@ -3,6 +3,11 @@
 @import "tw-animate-css";
 @import "shadcn-vue/tailwind.css";
 
+/* Markdown 正文排版（对话正文 + 右侧文档预览共用一套字级）。
+   注意：它必须留在任何 @layer 之外——未分层的规则才压得过 Tailwind 的分层工具类，
+   而 vue-stream-markdown 给每个元素挂的正是 .text-2xl / .my-4 这类工具类。 */
+@import "./markdown.css";
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

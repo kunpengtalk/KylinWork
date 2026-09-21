@@ -242,7 +242,7 @@ function askInTerminal(question, options, timeoutMs) {
 }
 
 // ---------- 工具/事件渲染 ----------
-const READ_ICON = new Set(["read_file", "list_files", "search_files", "web_search", "fetch_url", "render_page", "library_list", "library_read", "check_page", "look_at_image"]);
+const READ_ICON = new Set(["read_file", "list_files", "search_files", "web_search", "fetch_url", "render_page", "library_list", "library_read", "knowledge_search", "check_page", "look_at_image"]);
 const WRITE_ICON = new Set(["write_file", "edit_file", "gen_diagram", "html_to_image", "generate_image", "generate_video", "text_to_speech", "save_skill", "feishu_doc_create", "remember", "forget"]);
 const iconFor = (name) => (READ_ICON.has(name) ? "·" : WRITE_ICON.has(name) ? "+" : name === "run_shell" || name === "run_node" ? "⚡" : name.startsWith("delegate") ? "→" : "·");
 

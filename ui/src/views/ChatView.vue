@@ -241,8 +241,10 @@ function openSession(id: string) {
       if (!r.running && (await engineHasRunning(id))) resumeRun(id)
       await nextTick()
       scrollToBottom()
-      if (!r.messages.length) {
-        toast.info('这个会话没有可恢复的内容（可能引擎重启时未落盘）')
+      // 只有真读到了才谈「有没有内容」：hydrate 失败时上面已经报过错了，
+      // 这里再补一刀「没有可恢复的内容」只会把人引到「数据丢了」上去
+      if (r.hydrated && !r.messages.length) {
+        toast.info('这个会话在引擎里没有可回放的内容')
       }
     })
     .finally(() => {
@@ -773,7 +775,7 @@ function onOpenSessionEvent(e: Event) {
 }
 
 onUnmounted(() => {
-  // 这里**不再** abort：任务归 useChatRuns 管，离开页面（去专家广场、切设置…）不该把它掐掉。
+  // 这里**不再** abort：任务归 useChatRuns 管，离开页面（去专家·技能·连接器、切设置…）不该把它掐掉。
   // 引擎侧本来就不因为前端断开而停；前端这边现在也一样，回来接着看。
   if (unsubFiles) unsubFiles()
   window.removeEventListener(SESSIONS_CHANGED, onSessionsChanged)

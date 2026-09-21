@@ -8,6 +8,8 @@
  *     界面上的可视化选择器、以及 AI 的 create_schedule 工具都走这个；
  *   · cron：老式的 5 字段表达式（分 时 日 月 周），给习惯直接写的人留的后门。
  * 每个任务还能带一个 workspace_dir：到点就在那个工作空间里干活，不填则跟随当前工作空间。
+ * 每次执行都会开一条真正的会话（由上层注入的 startSession 负责）：这样「立即跑」之后
+ * 左侧任务列表里能看见它，点进去就是这次执行的对话与产出，而不是只有一个 finalText。
  */
 
 const fs = require("fs");
@@ -238,7 +240,7 @@ let activeScheduler = null;
 function setActiveScheduler(s) { activeScheduler = s; }
 function getActiveScheduler() { return activeScheduler; }
 
-function createScheduler({ runtime, onResult, storePath }) {
+function createScheduler({ runtime, onResult, storePath, startSession }) {
   // 测试要能指到别处去，不然一跑测试就把用户真的任务表洗了
   const file = storePath || STORE;
   const store = loadStore(file);
@@ -395,15 +397,14 @@ function createScheduler({ runtime, onResult, storePath }) {
       run.ms = Date.now() - startedMs;
       run.result = String(text || "").slice(0, 500);
       // 定时任务是无人值守的：成败都得让本机知道一声，不然跑挂了要等用户自己发现今天的日报没来
-      // 定时任务没有可回跳的会话，点通知就跳「自动化」页看执行记录
-      try { require("./notify").desktop(ok ? "done" : "error", ok ? "定时任务完成" : "定时任务出错", item.name, { target: "/automation" }); } catch {}
+      // 每次执行都开了一条会话（上面 startSession），所以点通知能直接跳进那条对话看过程；
+      // 只有在没有会话宿主时才退回「自动化」页看执行记录
+      try { require("./notify").desktop(ok ? "done" : "error", ok ? "定时任务完成" : "定时任务出错", item.name, run.session_id ? { session: run.session_id } : { target: "/automation" }); } catch {}
     };
 
     // 在任务自己的工作空间里干活。用 AsyncLocalStorage 把目录绑到本次调用链上，不动全局：
     // 以前是「切过去、跑完切回来」，用户中途改工作空间会被这行恢复抹掉，或者任务后半程写错地方。
     const execute = async () => {
-      // 每次执行用全新会话，避免历史无限增长
-      const history = [{ role: "user", content: item.task }];
       // 一次执行一个成果子目录（定时_月日_任务名）：不隔离的话，每天自动跑的产出全挤在
       // 工作区根目录，两周后就分不清哪份周报是哪天生成的。只在默认工作区里分——用户自选了
       // 目录意味着素材在原地，别替他做主建文件夹
@@ -411,7 +412,23 @@ function createScheduler({ runtime, onResult, storePath }) {
       if (path.resolve(getWorkspaceDir()) === dataPath("workspace")) {
         baseDir = allocateRunDir(getWorkspaceDir(), "定时", item.name || item.task);
       }
-      const { finalText } = await runtime.runTask({ history, baseDir });
+      let finalText;
+      if (startSession) {
+        // 开一条真正的会话（transcript / 直播 / 停止 都走它）：这样「立即跑」之后
+        // 左侧任务列表里能看见这条任务在跑，点进去就是它的对话与产出
+        const s = startSession({ item, run, baseDir, workspaceDir: getWorkspaceDir() });
+        run.session_id = s.sessionId;
+        run.session_project = s.project || "";
+        item.session_id = s.sessionId;
+        // 立刻落盘：前端是轮询运行记录来列会话的，不存这一下就要等到跑完才看得见
+        saveStore(store, file);
+        finalText = await s.done;
+      } else {
+        // 没有会话宿主（测试 / 精简调用）时的老路径：跑完只有一段 finalText
+        const history = [{ role: "user", content: item.task }];
+        const r = await runtime.runTask({ history, baseDir });
+        finalText = r && r.finalText;
+      }
       item.last_result = (finalText || "完成").slice(0, 500);
       finish(true, finalText || "完成");
       // 一次性任务跑完就收工，别明天同一分钟又跑一遍
