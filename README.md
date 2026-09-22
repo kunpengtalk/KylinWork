@@ -11,7 +11,22 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Node](https://img.shields.io/badge/node-%E2%89%A5%2022.19-3c873a.svg)](https://nodejs.org)
 
-[界面预览](#界面预览) · [快速开始](#快速开始) · [怎么用](#怎么用) · [配置](#配置) · [使用说明](./docs/使用说明.md) · [开发](#开发)
+[界面预览](#界面预览) · [快速开始](#快速开始) · [怎么用](#怎么用) · [配置](#配置) · [使用说明](./docs/使用说明.md) · [开发](#开发) · [**加群交流**](#加群交流)
+
+</div>
+
+---
+
+<div align="center">
+
+## 加群交流
+
+用得不顺、想要某个功能、发现 Bug，或者想一起把它做得更好——扫码进群直接聊；
+群里的进展通常比 Release 更早。
+
+<img src="./docs/images/community-group-qr.png" alt="KylinWork 交流群二维码" width="240">
+
+<sub>二维码若已过期，欢迎先提 <a href="https://github.com/kunpengtalk/KylinWork/issues">Issue</a> 提醒更新。</sub>
 
 </div>
 
@@ -441,6 +456,8 @@ CI 在 PR 与 main 上跑前端构建 + 引擎 e2e；打 `v*` 标签会构建三
 欢迎 Issue 与 PR。提交前请确保 `npm test` 与 `cd ui && npm run typecheck` 通过。
 
 改技能不用改代码——往 `skills/` 加一个目录就能提 PR。
+
+想先聊聊再动手，[扫码加群](#加群交流)；群里也欢迎提问、提需求和反馈 Bug。
 
 ## 许可证
 
